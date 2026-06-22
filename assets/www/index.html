@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ScoreFlow Engine</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 16px;
+            background-color: #ffffff;
+            font-family: sans-serif;
+            overflow-x: hidden;
+        }
+        #notation-container {
+            width: 100%;
+            min-height: 200px;
+            border: 1px dashed #ccc;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="notation-container">
+        ScoreFlow Render Engine Initialized
+    </div>
+
+    <script>
+        // Ждем, пока Flutter инициализирует JS-канал
+        window.addEventListener("flutterInAppWebViewPlatformReady", function(event) {
+            console.log("Flutter WebView Bridge Connected.");
+        });
+
+        // Функция-обработчик, которую будет вызывать Flutter
+        function handlePlaybackCommand(action, value) {
+            const container = document.getElementById('notation-container');
+            if (action === 'PLAY') {
+                container.innerHTML = "🎼 Музыка играет... Темп: " + value + " BPM";
+                container.style.color = "#2196F3";
+            } else if (action === 'PAUSE') {
+                container.innerHTML = "⏸ Пауза";
+                container.style.color = "#F44336";
+            }
+        }
+    </script>
+</body>
+</html>

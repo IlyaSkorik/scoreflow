@@ -1,0 +1,28 @@
+name: scoreflow
+description: "High-performance mobile music notation editor and player."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.12.2 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  # Самый стабильный плагин для WebView-бриджей с JS
+  flutter_inappwebview: ^6.1.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+
+  # Прописываем папку под локальный веб-движок нот (AlphaTab/VexFlow)
+  assets:
+    - assets/www/
+    - assets/www/js/
