@@ -3,6 +3,7 @@ import 'package:uuid/uuid.dart';
 
 import '../data/score_repository.dart';
 import '../models/score.dart';
+import '../widgets/instrument_icon.dart';
 import 'editor_screen.dart';
 
 /// «Кабинет» — локальная библиотека партитур: список, создание, удаление.
@@ -131,12 +132,11 @@ class _ScoreCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDrums = score.instrument == InstrumentType.drums;
     return Card(
       clipBehavior: Clip.antiAlias,
       child: ListTile(
         leading: CircleAvatar(
-          child: Icon(isDrums ? Icons.album : Icons.piano),
+          child: InstrumentIcon(score.instrument),
         ),
         title: Text(
           score.title,
@@ -262,10 +262,7 @@ class _NewScoreDialogState extends State<_NewScoreDialog> {
               children: [
                 for (final i in InstrumentType.values)
                   ChoiceChip(
-                    avatar: Icon(
-                      i == InstrumentType.drums ? Icons.album : Icons.piano,
-                      size: 18,
-                    ),
+                    avatar: InstrumentIcon(i, size: 18),
                     label: Text(i.label),
                     selected: _instrument == i,
                     onSelected: (_) => setState(() => _instrument = i),
@@ -293,7 +290,7 @@ class _NewScoreDialogState extends State<_NewScoreDialog> {
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   SizedBox(
-                    width: 72,
+                    width: 84,
                     child: TextField(
                       controller: _beatsCtrl,
                       keyboardType: TextInputType.number,
@@ -301,6 +298,8 @@ class _NewScoreDialogState extends State<_NewScoreDialog> {
                       onChanged: (_) => setState(() {}),
                       decoration: const InputDecoration(
                         labelText: 'Долей',
+                        isDense: true,
+                        border: OutlineInputBorder(),
                       ),
                     ),
                   ),
@@ -308,14 +307,23 @@ class _NewScoreDialogState extends State<_NewScoreDialog> {
                     padding: EdgeInsets.symmetric(horizontal: 10),
                     child: Text('/', style: TextStyle(fontSize: 24)),
                   ),
-                  DropdownButton<int>(
-                    value: _customBeatValue,
-                    items: [
-                      for (final v in _beatValues)
-                        DropdownMenuItem(value: v, child: Text('$v')),
-                    ],
-                    onChanged: (v) =>
-                        setState(() => _customBeatValue = v ?? 4),
+                  SizedBox(
+                    width: 96,
+                    child: DropdownButtonFormField<int>(
+                      initialValue: _customBeatValue,
+                      isDense: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Длит.',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                      ),
+                      items: [
+                        for (final v in _beatValues)
+                          DropdownMenuItem(value: v, child: Text('$v')),
+                      ],
+                      onChanged: (v) =>
+                          setState(() => _customBeatValue = v ?? 4),
+                    ),
                   ),
                 ],
               ),

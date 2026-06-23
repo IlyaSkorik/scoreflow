@@ -22,8 +22,8 @@ enum InstrumentType {
       };
 
   String get label => switch (this) {
-        InstrumentType.piano => 'Клавишные',
-        InstrumentType.drums => 'Ударные',
+        InstrumentType.piano => 'Фортепиано',
+        InstrumentType.drums => 'Ударная установка',
       };
 }
 
