@@ -4,48 +4,302 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>ScoreFlow Engine</title>
+
+    <!-- Локальный (offline) движок нотного рендеринга. Грузится через
+         InAppLocalhostServer, поэтому относительный путь резолвится. -->
+    <script src="js/vexflow.js"></script>
+
     <style>
-        body {
+        html, body {
             margin: 0;
-            padding: 16px;
+            padding: 0;
             background-color: #ffffff;
             font-family: sans-serif;
-            overflow-x: hidden;
+            -webkit-user-select: none;
+            user-select: none;
         }
         #notation-container {
+            position: relative;
             width: 100%;
-            min-height: 200px;
-            border: 1px dashed #ccc;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: #666;
+            box-sizing: border-box;
+            padding: 8px;
+        }
+        #notation-container svg { display: block; }
+        #playhead {
+            position: absolute;
+            top: 8px;
+            width: 2px;
+            background-color: rgba(33, 150, 243, 0.85);
+            opacity: 0;
+            transition: opacity 0.12s ease;
+            pointer-events: none;
+        }
+        #playhead.active { opacity: 1; }
+        #engine-error {
+            padding: 16px;
+            color: #c62828;
+            font-size: 14px;
+            text-align: center;
         }
     </style>
 </head>
 <body>
-
     <div id="notation-container">
-        ScoreFlow Render Engine Initialized
+        <div id="playhead"></div>
     </div>
 
     <script>
-        // Ждем, пока Flutter инициализирует JS-канал
-        window.addEventListener("flutterInAppWebViewPlatformReady", function(event) {
-            console.log("Flutter WebView Bridge Connected.");
+    // =====================================================================
+    //  ScoreFlow notation engine — data-driven VexFlow renderer + JS bridge
+    // =====================================================================
+    (function () {
+        'use strict';
+
+        const REST_KEY = { treble: 'b/4', bass: 'd/3', percussion: 'b/4' };
+        const PLAY = { isPlaying: false, tempo: 120, raf: null };
+        let lastPayload = null; // отрисуем заново при ресайзе
+
+        function el(id) { return document.getElementById(id); }
+
+        function showError(msg) {
+            const c = el('notation-container');
+            let e = el('engine-error');
+            if (!e) {
+                e = document.createElement('div');
+                e.id = 'engine-error';
+                c.appendChild(e);
+            }
+            e.textContent = msg;
+        }
+
+        function clearCanvas() {
+            const c = el('notation-container');
+            const svg = c.querySelector('svg');
+            if (svg) svg.remove();
+            const err = el('engine-error');
+            if (err) err.remove();
+        }
+
+        // --- Разбор ключа VexFlow на букву + акциденталь ("c#/4" -> '#') -----
+        function accidentalOf(key) {
+            const letterAndAcc = key.split('/')[0]; // "c#" / "cb" / "c"
+            const acc = letterAndAcc.substring(1);  // "#", "b", "##", "bb" или ""
+            return (acc === '#' || acc === 'b' || acc === '##' || acc === 'bb')
+                ? acc : null;
+        }
+
+        // --- Построение тиклов одного голоса -------------------------------
+        function buildVoice(VF, notes, clef, beats, beatValue, cursorIdx) {
+            const tickables = [];
+
+            if (!notes || notes.length === 0) {
+                // Пустой такт -> целая пауза, чтобы такт всегда рисовался.
+                tickables.push(new VF.StaveNote({
+                    keys: [REST_KEY[clef]], duration: 'wr', clef: clef,
+                }));
+            } else {
+                notes.forEach((n, i) => {
+                    const isRest = !!n.rest;
+                    const dur = isRest ? n.duration + 'r' : n.duration;
+                    const keys = isRest ? [REST_KEY[clef]] : n.keys;
+                    const sn = new VF.StaveNote({
+                        keys: keys, duration: dur, clef: clef, auto_stem: true,
+                    });
+                    if (!isRest) {
+                        keys.forEach((k, ki) => {
+                            const acc = accidentalOf(k);
+                            if (acc) sn.addModifier(new VF.Accidental(acc), ki);
+                        });
+                    }
+                    if (i === cursorIdx) {
+                        sn.setStyle({ fillStyle: '#2196F3', strokeStyle: '#2196F3' });
+                    }
+                    tickables.push(sn);
+                });
+            }
+
+            const voice = new VF.Voice({ num_beats: beats, beat_value: beatValue });
+            voice.setMode(VF.Voice.Mode.SOFT); // терпим неполный такт при редактировании
+            voice.addTickables(tickables);
+            return voice;
+        }
+
+        // --- Главная функция отрисовки -------------------------------------
+        function render(score) {
+            if (typeof Vex === 'undefined' || !Vex.Flow) {
+                showError('Нотный движок не загрузился (assets/www/js/vexflow.js).');
+                return;
+            }
+            const VF = Vex.Flow;
+            clearCanvas();
+
+            const container = el('notation-container');
+            const width = Math.max(320, container.clientWidth);
+            const ts = (score.timeSignature || '4/4').split('/');
+            const beats = parseInt(ts[0], 10) || 4;
+            const beatValue = parseInt(ts[1], 10) || 4;
+            const isDrums = score.instrument === 'drums';
+            const measures = score.measures || [];
+            const cursor = score.cursor || { measure: -1, voice: '', index: -1 };
+
+            // --- раскладка: несколько тактов в строку, перенос по ширине ----
+            const margin = 8;
+            const usableW = width - 2 * margin;
+            const minMeasureW = isDrums ? 180 : 220;
+            let perRow = Math.max(1, Math.floor(usableW / minMeasureW));
+            perRow = Math.min(perRow, Math.max(1, measures.length));
+            const measureW = usableW / perRow;
+            const rows = Math.ceil(Math.max(1, measures.length) / perRow);
+            const rowH = isDrums ? 130 : 200;
+            const bassDY = 90;
+            const totalH = rows * rowH + 2 * margin;
+
+            const renderer = new VF.Renderer(container, VF.Renderer.Backends.SVG);
+            renderer.resize(width, totalH);
+            const ctx = renderer.getContext();
+
+            for (let i = 0; i < measures.length; i++) {
+                const m = measures[i];
+                const row = Math.floor(i / perRow);
+                const col = i % perRow;
+                const x = margin + col * measureW;
+                const yTop = margin + row * rowH;
+                const rowStart = col === 0;
+                const isFirst = i === 0;
+
+                try {
+                    if (isDrums) {
+                        const stave = new VF.Stave(x, yTop + 20, measureW);
+                        if (rowStart) stave.addClef('percussion');
+                        if (isFirst) stave.addTimeSignature(score.timeSignature);
+                        stave.setContext(ctx).draw();
+
+                        const cIdx = (cursor.measure === i && cursor.voice === 'perc')
+                            ? cursor.index : -1;
+                        const v = buildVoice(VF, m.perc, 'percussion', beats, beatValue, cIdx);
+                        formatAndDraw(VF, ctx, [v], [stave], measureW, rowStart, isFirst);
+                    } else {
+                        const treble = new VF.Stave(x, yTop, measureW);
+                        const bass = new VF.Stave(x, yTop + bassDY, measureW);
+                        if (rowStart) { treble.addClef('treble'); bass.addClef('bass'); }
+                        if (isFirst) {
+                            treble.addKeySignature(score.keySignature || 'C');
+                            bass.addKeySignature(score.keySignature || 'C');
+                            treble.addTimeSignature(score.timeSignature);
+                            bass.addTimeSignature(score.timeSignature);
+                        }
+                        treble.setContext(ctx).draw();
+                        bass.setContext(ctx).draw();
+
+                        const tIdx = (cursor.measure === i && cursor.voice === 'treble')
+                            ? cursor.index : -1;
+                        const bIdx = (cursor.measure === i && cursor.voice === 'bass')
+                            ? cursor.index : -1;
+                        const tv = buildVoice(VF, m.treble, 'treble', beats, beatValue, tIdx);
+                        const bv = buildVoice(VF, m.bass, 'bass', beats, beatValue, bIdx);
+                        formatAndDraw(VF, ctx, [tv, bv], [treble, bass], measureW, rowStart, isFirst);
+
+                        if (rowStart) {
+                            new VF.StaveConnector(treble, bass)
+                                .setType(VF.StaveConnector.type.BRACE).setContext(ctx).draw();
+                            new VF.StaveConnector(treble, bass)
+                                .setType(VF.StaveConnector.type.SINGLE_LEFT).setContext(ctx).draw();
+                        }
+                    }
+                } catch (err) {
+                    console.error('Render measure ' + i + ' failed:', err);
+                }
+            }
+
+            // плейхед на всю высоту нотного полотна
+            const playhead = el('playhead');
+            playhead.style.height = (totalH - 16) + 'px';
+        }
+
+        function formatAndDraw(VF, ctx, voices, staves, measureW, rowStart, isFirst) {
+            const fmt = new VF.Formatter();
+            voices.forEach((v) => fmt.joinVoices([v]));
+            let pad = 24;
+            if (rowStart) pad += 36;   // место под ключ
+            if (isFirst) pad += 46;    // размер + тональность
+            const fw = Math.max(50, measureW - pad);
+            fmt.format(voices, fw);
+
+            voices.forEach((v, idx) => {
+                v.draw(ctx, staves[idx]);
+                const beams = VF.Beam.generateBeams(v.getTickables());
+                beams.forEach((b) => b.setContext(ctx).draw());
+            });
+        }
+
+        // --- Анимация плейхеда (визуальная реакция моста, пока без звука) ---
+        function animatePlayhead() {
+            const container = el('notation-container');
+            const playhead = el('playhead');
+            const trackW = container.clientWidth - 16;
+            const msPerBeat = 60000 / PLAY.tempo;
+            const passDuration = 4 * msPerBeat; // условно один такт 4/4
+            const stepMs = 16;
+            const stepPx = (trackW / passDuration) * stepMs;
+            let pos = 0;
+
+            function tick() {
+                if (!PLAY.isPlaying) return;
+                pos += stepPx;
+                if (pos >= trackW) pos = 0;
+                playhead.style.left = (8 + pos) + 'px';
+                PLAY.raf = requestAnimationFrame(tick);
+            }
+            PLAY.raf = requestAnimationFrame(tick);
+        }
+
+        // =================================================================
+        //  Публичный мост (вызывается из Flutter)
+        // =================================================================
+
+        // Принимает base64(UTF-8 JSON) — безопасно для evaluateJavascript.
+        window.ScoreFlow = {
+            renderB64: function (b64) {
+                try {
+                    const json = decodeURIComponent(escape(window.atob(b64)));
+                    lastPayload = JSON.parse(json);
+                    render(lastPayload);
+                } catch (e) {
+                    showError('Ошибка разбора партитуры: ' + e.message);
+                }
+            },
+        };
+
+        // Сохраняем существующий контракт плеера без изменения сигнатуры.
+        window.handlePlaybackCommand = function (action, value) {
+            const playhead = el('playhead');
+            if (action === 'PLAY') {
+                PLAY.isPlaying = true;
+                PLAY.tempo = Number(value) || 120;
+                playhead.classList.add('active');
+                if (PLAY.raf) cancelAnimationFrame(PLAY.raf);
+                animatePlayhead();
+            } else if (action === 'PAUSE') {
+                PLAY.isPlaying = false;
+                if (PLAY.raf) { cancelAnimationFrame(PLAY.raf); PLAY.raf = null; }
+                playhead.classList.remove('active');
+            }
+        };
+
+        // Мост Flutter готов.
+        window.addEventListener('flutterInAppWebViewPlatformReady', function () {
+            console.log('Flutter WebView Bridge Connected.');
         });
 
-        // Функция-обработчик, которую будет вызывать Flutter
-        function handlePlaybackCommand(action, value) {
-            const container = document.getElementById('notation-container');
-            if (action === 'PLAY') {
-                container.innerHTML = "🎼 Музыка играет... Темп: " + value + " BPM";
-                container.style.color = "#2196F3";
-            } else if (action === 'PAUSE') {
-                container.innerHTML = "⏸ Пауза";
-                container.style.color = "#F44336";
-            }
-        }
+        // Перерисовка под новую ширину (поворот экрана / смена вида).
+        let resizeTimer = null;
+        window.addEventListener('resize', function () {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(function () {
+                if (lastPayload) render(lastPayload);
+            }, 180);
+        });
+    })();
     </script>
 </body>
 </html>

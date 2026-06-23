@@ -1,30 +1,26 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
+// Базовый smoke-тест: модель партитуры сериализуется без потерь.
 
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:scoreflow/main.dart';
+import 'package:scoreflow/models/score.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  test('Score round-trips through JSON', () {
+    final now = DateTime(2026, 1, 1);
+    final score = Score.create(
+      id: 'test-id',
+      title: 'Этюд',
+      instrument: InstrumentType.piano,
+      now: now,
+    );
+    score.measures.first.voice('treble').add(
+          MusicNote(keys: ['c/4'], duration: 'q'),
+        );
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    final restored = Score.decode(score.encode());
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(restored.id, 'test-id');
+    expect(restored.title, 'Этюд');
+    expect(restored.instrument, InstrumentType.piano);
+    expect(restored.measures.first.voice('treble').first.keys, ['c/4']);
   });
 }

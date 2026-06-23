@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Разрешаем незашифрованный (cleartext) трафик ТОЛЬКО для локального
+     loopback-сервера движка (InAppLocalhostServer). Внешний http остаётся
+     запрещённым — offline-first, наружу ничего не уходит. -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+    </domain-config>
+</network-security-config>

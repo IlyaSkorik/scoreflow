@@ -13,6 +13,10 @@ dependencies:
   cupertino_icons: ^1.0.8
   # Самый стабильный плагин для WebView-бриджей с JS
   flutter_inappwebview: ^6.1.5
+  # Локальное файловое хранилище партитур (offline-first)
+  path_provider: ^2.1.4
+  # Идентификаторы партитур
+  uuid: ^4.5.1
 
 dev_dependencies:
   flutter_test:
