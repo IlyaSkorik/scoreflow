@@ -43,3 +43,10 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Сэмплы рояля — бинарные ассеты, скачиваются tools/fetch_salamander.mjs.
+# manifest.json остаётся в репозитории (источник правды + непустая папка).
+/assets/www/piano/*.mp3
+/assets/www/piano/*.ogg
+/assets/www/piano/*.m4a
+/assets/www/piano/*.wav

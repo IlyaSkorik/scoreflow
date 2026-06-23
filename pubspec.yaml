@@ -29,3 +29,6 @@ flutter:
   assets:
     - assets/www/
     - assets/www/js/
+    # Сэмплы концертного рояля (Salamander, оффлайн). Файлы кладёт
+    # tools/fetch_salamander.mjs; manifest.json присутствует всегда.
+    - assets/www/piano/

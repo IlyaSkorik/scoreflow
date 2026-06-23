@@ -35,6 +35,19 @@
             pointer-events: none;
         }
         #playhead.active { opacity: 1; }
+
+        /* Слой подсветки звучащих нот (поверх SVG, не перехватывает клики). */
+        #note-highlights {
+            position: absolute;
+            left: 0; top: 0;
+            pointer-events: none;
+        }
+        .note-hl {
+            position: absolute;
+            background: rgba(33, 150, 243, 0.22);
+            border-radius: 3px;
+            pointer-events: none;
+        }
         #engine-error {
             padding: 16px;
             color: #c62828;
@@ -87,10 +100,11 @@
         'use strict';
 
         const REST_KEY = { treble: 'b/4', bass: 'd/3', percussion: 'b/4' };
-        const PLAY = { isPlaying: false, tempo: 120, raf: null };
+        const PAD = 8;            // CSS-padding контейнера (см. #notation-container)
         let lastPayload = null;   // отрисуем заново при ресайзе
         let lastLayout = null;    // геометрия последней раскладки (для экспорта)
         let noteHits = [];        // bounding box'ы нот для тап-навигации
+        let noteHitIndex = {};    // noteId ("m:v:i") -> bbox (playhead/подсветка)
         let tapAttached = false;
 
         function el(id) { return document.getElementById(id); }
@@ -251,12 +265,18 @@
                 }
             }
 
-            // геометрия раскладки — нужна экспортёру для нарезки на страницы
-            lastLayout = { width: width, totalH: totalH, rowH: rowH, rows: rows, margin: margin };
+            // индекс координат нот по noteId — для note-synced playhead/подсветки
+            noteHitIndex = {};
+            for (let h = 0; h < noteHits.length; h++) {
+                noteHitIndex[noteHits[h].id] = noteHits[h];
+            }
 
-            // плейхед на всю высоту нотного полотна
-            const playhead = el('playhead');
-            playhead.style.height = (totalH - 16) + 'px';
+            // геометрия раскладки — нужна экспортёру и плееру
+            lastLayout = { width: width, totalH: totalH, rowH: rowH, rows: rows,
+                           perRow: perRow, margin: margin };
+
+            // если идёт воспроизведение — пересобрать события под новую раскладку
+            Playback.onRender();
 
             attachTapListener();
         }
@@ -298,6 +318,7 @@
                     try { bb = t.getBoundingBox(); } catch (e) { return; }
                     if (!bb) return;
                     noteHits.push({
+                        id: t.__hit.m + ':' + t.__hit.v + ':' + t.__hit.i,
                         m: t.__hit.m, v: t.__hit.v, i: t.__hit.i,
                         x: bb.getX(), y: bb.getY(), w: bb.getW(), h: bb.getH(),
                     });
@@ -333,26 +354,600 @@
             });
         }
 
-        // --- Анимация плейхеда (визуальная реакция моста, пока без звука) ---
-        function animatePlayhead() {
-            const container = el('notation-container');
-            const playhead = el('playhead');
-            const trackW = container.clientWidth - 16;
-            const msPerBeat = 60000 / PLAY.tempo;
-            const passDuration = 4 * msPerBeat; // условно один такт 4/4
-            const stepMs = 16;
-            const stepPx = (trackW / passDuration) * stepMs;
-            let pos = 0;
+        // =================================================================
+        //  Профессиональное оффлайн-воспроизведение
+        //  - Playback Compiler: партитура -> события (noteId/startBeat/...)
+        //  - AudioEngine: синтез голосов и ударных через Web Audio API
+        //  - Scheduler: упреждающее планирование по AudioContext.currentTime
+        //  - Note-synced playhead + подсветка нот + метроном
+        //
+        //  setInterval используется ТОЛЬКО как «насос» упреждения; тайминг
+        //  звука и визуала привязан к AudioContext.currentTime (паттерн
+        //  «двух часов»). setTimeout как механизм синхронизации не применяется.
+        // =================================================================
 
-            function tick() {
-                if (!PLAY.isPlaying) return;
-                pos += stepPx;
-                if (pos >= trackW) pos = 0;
-                playhead.style.left = (8 + pos) + 'px';
-                PLAY.raf = requestAnimationFrame(tick);
+        // длительность VexFlow -> доли в ЧЕТВЕРТЯХ (quarter beats)
+        const QBEATS = { w: 4, h: 2, q: 1, '8': 0.5, '16': 0.25 };
+
+        // VexFlow-ключ "c#/4" -> частота (Гц); для ударных не используется
+        const SEMI = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
+        function keyToFreq(key) {
+            const parts = key.split('/');
+            const la = (parts[0] || 'a').toLowerCase();
+            let semis = SEMI[la[0]];
+            if (semis === undefined) return 440;
+            for (let k = 1; k < la.length; k++) {
+                if (la[k] === '#') semis += 1;
+                else if (la[k] === 'b') semis -= 1;
             }
-            PLAY.raf = requestAnimationFrame(tick);
+            const octave = parseInt(parts[1], 10);
+            const midi = (octave + 1) * 12 + semis;
+            return 440 * Math.pow(2, (midi - 69) / 12);
         }
+
+        // VexFlow-ключ "c#/4" -> MIDI-номер (для сэмплерного рояля)
+        function keyToMidi(key) {
+            const parts = key.split('/');
+            const la = (parts[0] || 'a').toLowerCase();
+            let semis = SEMI[la[0]];
+            if (semis === undefined) semis = 9;
+            for (let k = 1; k < la.length; k++) {
+                if (la[k] === '#') semis += 1;
+                else if (la[k] === 'b') semis -= 1;
+            }
+            return (parseInt(parts[1], 10) + 1) * 12 + semis;
+        }
+
+        // База перкуссии "letter/octave" (без головки) -> тип ударного
+        const DRUM_MAP = {
+            'f/4': 'kick', 'c/5': 'snare', 'g/5': 'hihat', 'e/5': 'tom1',
+            'd/5': 'tom2', 'a/4': 'ftom', 'a/5': 'crash', 'f/5': 'ride',
+        };
+        function drumType(key) {
+            const p = key.split('/');
+            return DRUM_MAP[p[0] + '/' + p[1]] || 'snare';
+        }
+
+        // --- Playback Compiler ---------------------------------------------
+        // Событие: { noteId, startBeat, durationBeats, keys, voiceId, rest }.
+        // Биты — в четвертях. Старт каждого такта привязан к его индексу
+        // (base = mi * measureQ), поэтому неполные/перелитые такты не сбивают
+        // временную сетку. Паузы и пустые такты дают «якоря» для playhead.
+        function compilePlayback(payload) {
+            const ts = (payload.timeSignature || '4/4').split('/');
+            const beats = parseInt(ts[0], 10) || 4;
+            const beatValue = parseInt(ts[1], 10) || 4;
+            const isDrums = payload.instrument === 'drums';
+            const voiceIds = isDrums ? ['perc'] : ['treble', 'bass'];
+            const measures = payload.measures || [];
+            const measureQ = beats * (4 / beatValue); // длина такта в четвертях
+            const events = [];
+
+            for (let mi = 0; mi < measures.length; mi++) {
+                const base = mi * measureQ;
+                for (let vi = 0; vi < voiceIds.length; vi++) {
+                    const v = voiceIds[vi];
+                    const notes = (measures[mi] && measures[mi][v]) || [];
+                    if (notes.length === 0) {
+                        events.push({ noteId: mi + ':' + v + ':-1', startBeat: base,
+                            durationBeats: measureQ, keys: [], voiceId: v, rest: true });
+                        continue;
+                    }
+                    let acc = 0;
+                    for (let ni = 0; ni < notes.length; ni++) {
+                        const n = notes[ni];
+                        const q = QBEATS[n.duration] != null ? QBEATS[n.duration] : 1;
+                        events.push({
+                            noteId: mi + ':' + v + ':' + ni,
+                            startBeat: base + acc,
+                            durationBeats: q,
+                            keys: n.keys || [],
+                            voiceId: v,
+                            rest: !!n.rest,
+                            // Громкость ноты (0..1). Сейчас по умолчанию mf;
+                            // позже сюда проецируются динамические оттенки.
+                            velocity: n.velocity != null ? n.velocity : 0.78,
+                        });
+                        acc += q;
+                    }
+                }
+            }
+            events.sort(function (a, b) { return a.startBeat - b.startBeat; });
+            return {
+                events: events,
+                totalBeats: measures.length * measureQ,
+                beats: beats, beatValue: beatValue, measureQ: measureQ,
+                isDrums: isDrums, primaryVoice: isDrums ? 'perc' : 'treble',
+            };
+        }
+
+        // --- AudioEngine (Web Audio API, полностью оффлайн) ----------------
+        const AudioEngine = {
+            ctx: null, master: null, noise: null,
+
+            ensure: function () {
+                if (this.ctx) return this.ctx;
+                const AC = window.AudioContext || window.webkitAudioContext;
+                if (!AC) return null;
+                this.ctx = new AC();
+                this.master = this.ctx.createGain();
+                this.master.gain.value = 0.9;
+                this.master.connect(this.ctx.destination);
+                // буфер белого шума для ударных — создаётся один раз
+                const len = Math.floor(this.ctx.sampleRate);
+                const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
+                const d = buf.getChannelData(0);
+                for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+                this.noise = buf;
+                return this.ctx;
+            },
+            resume: function () {
+                if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+            },
+            noiseSource: function () {
+                const s = this.ctx.createBufferSource();
+                s.buffer = this.noise;
+                return s;
+            },
+
+            // Фортепианная нота: реальный сэмпл концертного рояля, если пак
+            // загружен; иначе — синтез-fallback (прежнее поведение), чтобы
+            // воспроизведение работало даже без ассетов.
+            playPiano: function (midi, when, durSec, velocity) {
+                if (SampledPiano.noteOn(midi, when, durSec, velocity)) return;
+                this.playPitch(440 * Math.pow(2, (midi - 69) / 12), when, durSec, velocity);
+            },
+
+            // Тон с ADSR-огибающей. ТОЧКА РАСШИРЕНИЯ ПОД SOUNDFONT: здесь
+            // playPitch заменяется на воспроизведение AudioBuffer-сэмпла из
+            // assets без правок планировщика и визуала.
+            playPitch: function (freq, when, durSec, velocity) {
+                const ctx = this.ctx; if (!ctx) return;
+                const dur = Math.max(0.08, durSec);
+                const vel = velocity == null ? 0.8 : velocity;
+                const g = ctx.createGain();
+                const lp = ctx.createBiquadFilter();
+                lp.type = 'lowpass';
+                lp.frequency.value = Math.min(8000, freq * 6 + 800);
+                const o1 = ctx.createOscillator(); o1.type = 'triangle'; o1.frequency.value = freq;
+                const o2 = ctx.createOscillator(); o2.type = 'sine';     o2.frequency.value = freq * 2;
+                const g2 = ctx.createGain(); g2.gain.value = 0.35; // обертон
+                o1.connect(g); o2.connect(g2); g2.connect(g);
+                g.connect(lp); lp.connect(this.master);
+                const peak = 0.28 * vel;
+                const end = when + dur;
+                g.gain.setValueAtTime(0.0001, when);
+                g.gain.exponentialRampToValueAtTime(peak, when + 0.008);
+                g.gain.exponentialRampToValueAtTime(Math.max(0.0008, peak * 0.3), when + dur * 0.5);
+                g.gain.exponentialRampToValueAtTime(0.0001, end);
+                o1.start(when); o2.start(when);
+                o1.stop(end + 0.03); o2.stop(end + 0.03);
+            },
+
+            playDrum: function (type, when) {
+                const ctx = this.ctx; if (!ctx) return;
+                if (type === 'kick') {
+                    const o = ctx.createOscillator(); const g = ctx.createGain();
+                    o.type = 'sine';
+                    o.frequency.setValueAtTime(160, when);
+                    o.frequency.exponentialRampToValueAtTime(50, when + 0.12);
+                    g.gain.setValueAtTime(0.9, when);
+                    g.gain.exponentialRampToValueAtTime(0.0001, when + 0.18);
+                    o.connect(g); g.connect(this.master);
+                    o.start(when); o.stop(when + 0.2);
+                    return;
+                }
+                if (type === 'snare' || type === 'tom1' || type === 'tom2' || type === 'ftom') {
+                    const tone = { snare: 0, tom1: 320, tom2: 240, ftom: 160 }[type];
+                    const s = this.noiseSource(); const ng = ctx.createGain();
+                    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass';
+                    bp.frequency.value = type === 'snare' ? 1800 : 400;
+                    s.connect(bp); bp.connect(ng); ng.connect(this.master);
+                    const decay = type === 'snare' ? 0.18 : 0.12;
+                    ng.gain.setValueAtTime(type === 'snare' ? 0.7 : 0.4, when);
+                    ng.gain.exponentialRampToValueAtTime(0.0001, when + decay);
+                    s.start(when); s.stop(when + 0.25);
+                    if (tone) {
+                        const o = ctx.createOscillator(); const g = ctx.createGain();
+                        o.type = 'sine'; o.frequency.setValueAtTime(tone, when);
+                        o.frequency.exponentialRampToValueAtTime(tone * 0.6, when + 0.18);
+                        g.gain.setValueAtTime(0.6, when);
+                        g.gain.exponentialRampToValueAtTime(0.0001, when + 0.22);
+                        o.connect(g); g.connect(this.master);
+                        o.start(when); o.stop(when + 0.24);
+                    }
+                    return;
+                }
+                // тарелки/хай-хэт: фильтрованный шум
+                const decay = type === 'hihat' ? 0.06 : (type === 'ride' ? 0.4 : 0.7);
+                const s = this.noiseSource(); const hp = ctx.createBiquadFilter();
+                hp.type = 'highpass'; hp.frequency.value = type === 'hihat' ? 7000 : 5000;
+                const g = ctx.createGain();
+                s.connect(hp); hp.connect(g); g.connect(this.master);
+                g.gain.setValueAtTime(type === 'hihat' ? 0.5 : 0.4, when);
+                g.gain.exponentialRampToValueAtTime(0.0001, when + decay);
+                s.start(when); s.stop(when + decay + 0.05);
+            },
+
+            click: function (when, accent) {
+                const ctx = this.ctx; if (!ctx) return;
+                const o = ctx.createOscillator(); const g = ctx.createGain();
+                o.type = 'square';
+                o.frequency.value = accent ? 2000 : 1400;
+                g.gain.setValueAtTime(0.0001, when);
+                g.gain.exponentialRampToValueAtTime(accent ? 0.5 : 0.3, when + 0.001);
+                g.gain.exponentialRampToValueAtTime(0.0001, when + 0.04);
+                o.connect(g); g.connect(this.master);
+                o.start(when); o.stop(when + 0.05);
+            },
+        };
+
+        // --- Сэмплерный концертный рояль (реальные записи, оффлайн) --------
+        // Multi-sample player на AudioBufferSourceNode. Атака молоточка, decay
+        // и sustain заложены в самих сэмплах; между опорными нотами — питч-шифт
+        // через playbackRate (≤1 полутона при сэмплировании по малым терциям).
+        // Поддерживает velocity-слои, демпфер-педаль (sustain) и release-хвост.
+        // Сэмплы (Salamander Grand Piano, CC-BY) кладёт tools/fetch_salamander.mjs;
+        // раздаются локальным сервером — в рантайме сети нет.
+        const SampledPiano = {
+            ctx: null, master: null,
+            ready: false, loading: false,
+            zones: [], release: 0.4, sustain: false,
+            voices: [], maxVoices: 64, gc: null,
+
+            // Загрузка манифеста + декодирование сэмплов в AudioBuffer.
+            load: function (ctx, master) {
+                if (this.ready || this.loading) return Promise.resolve(this.ready);
+                this.ctx = ctx; this.master = master; this.loading = true;
+                const self = this;
+                return fetch('piano/manifest.json', { cache: 'force-cache' })
+                    .then(function (r) { if (!r.ok) throw new Error('нет manifest.json'); return r.json(); })
+                    .then(function (man) {
+                        self.release = man.release != null ? man.release : 0.4;
+                        const base = man.basePath || 'piano/';
+                        const zones = man.zones || [];
+                        return Promise.all(zones.map(function (z) {
+                            return fetch(base + z.file)
+                                .then(function (r) { if (!r.ok) throw new Error(z.file); return r.arrayBuffer(); })
+                                .then(function (ab) { return ctx.decodeAudioData(ab); })
+                                .then(function (buf) {
+                                    return {
+                                        rootMidi: z.rootMidi,
+                                        loMidi: z.loMidi != null ? z.loMidi : 0,
+                                        hiMidi: z.hiMidi != null ? z.hiMidi : 127,
+                                        loVel: z.loVel != null ? z.loVel : 0,
+                                        hiVel: z.hiVel != null ? z.hiVel : 127,
+                                        buffer: buf,
+                                    };
+                                });
+                        }));
+                    })
+                    .then(function (loaded) {
+                        self.zones = loaded;
+                        self.ready = loaded.length > 0;
+                        self.loading = false;
+                        console.log('SampledPiano: загружено зон ' + loaded.length);
+                        return self.ready;
+                    })
+                    .catch(function (e) {
+                        self.loading = false; self.ready = false;
+                        console.log('SampledPiano недоступен, синтез-fallback: ' + e.message);
+                        return false;
+                    });
+            },
+
+            isReady: function () { return this.ready; },
+
+            // Демпфер-педаль: при отпускании глушит ноты, державшиеся педалью.
+            setSustain: function (on) {
+                this.sustain = !!on;
+                if (!this.sustain && this.ctx) {
+                    const now = this.ctx.currentTime;
+                    for (let i = 0; i < this.voices.length; i++) {
+                        const v = this.voices[i];
+                        if (v.held && !v.releasing) this._release(v, now);
+                    }
+                }
+            },
+
+            // Выбор зоны: подходящий velocity-слой, затем ближайший корень.
+            _pick: function (midi, vel) {
+                let best = null, bestD = 1e9;
+                for (let i = 0; i < this.zones.length; i++) {
+                    const z = this.zones[i];
+                    if (vel < z.loVel || vel > z.hiVel) continue;
+                    if (midi < z.loMidi || midi > z.hiMidi) continue;
+                    const d = Math.abs(midi - z.rootMidi);
+                    if (d < bestD) { bestD = d; best = z; }
+                }
+                if (best) return best;
+                for (let i = 0; i < this.zones.length; i++) {
+                    const d = Math.abs(midi - this.zones[i].rootMidi);
+                    if (d < bestD) { bestD = d; best = this.zones[i]; }
+                }
+                return best;
+            },
+
+            // Сэмпл-точный note-on. Возвращает false, если пак не готов —
+            // тогда вызывающий уходит в синтез-fallback.
+            noteOn: function (midi, when, durSec, velocity) {
+                const ctx = this.ctx; if (!ctx || !this.ready) return false;
+                const vel = Math.max(1, Math.min(127,
+                    Math.round((velocity == null ? 0.78 : velocity) * 127)));
+                const z = this._pick(midi, vel); if (!z) return false;
+                if (this.voices.length >= this.maxVoices) {
+                    this._release(this.voices[0], ctx.currentTime); // кража голоса
+                }
+                const src = ctx.createBufferSource();
+                src.buffer = z.buffer;
+                src.playbackRate.value = Math.pow(2, (midi - z.rootMidi) / 12);
+                const g = ctx.createGain();
+                g.gain.value = 0.2 + 0.6 * (vel / 127); // громкость по velocity
+                src.connect(g); g.connect(this.master);
+                src.start(when);
+                const voice = {
+                    src: src, g: g, midi: midi,
+                    releaseAt: when + Math.max(0.05, durSec),
+                    held: false, releasing: false, dead: false,
+                };
+                src.onended = function () { voice.dead = true; };
+                this.voices.push(voice);
+                this._ensureGc();
+                return true;
+            },
+
+            // Спад после «отпускания клавиши» (или педали) + остановка источника.
+            _release: function (voice, t) {
+                if (voice.releasing) return;
+                voice.releasing = true;
+                const g = voice.g.gain;
+                try {
+                    g.cancelScheduledValues(t);
+                    g.setValueAtTime(Math.max(0.0001, g.value), t);
+                    g.setTargetAtTime(0.0001, t, this.release / 3);
+                } catch (e) { /* no-op */ }
+                try { voice.src.stop(t + this.release + 0.3); } catch (e) { /* no-op */ }
+            },
+
+            // Housekeeping-таймер: НЕ музыкальный планировщик. Снимает ноты по
+            // истечении длительности (с учётом педали) и чистит отыгравшие
+            // голоса. Тайминг note-on остаётся сэмпл-точным.
+            _ensureGc: function () {
+                if (this.gc) return;
+                const self = this;
+                this.gc = setInterval(function () {
+                    const ctx = self.ctx; if (!ctx) return;
+                    const now = ctx.currentTime;
+                    for (let i = self.voices.length - 1; i >= 0; i--) {
+                        const v = self.voices[i];
+                        if (v.dead) { self.voices.splice(i, 1); continue; }
+                        if (!v.releasing && now >= v.releaseAt) {
+                            if (self.sustain) v.held = true;     // педаль держит ноту
+                            else self._release(v, now);
+                        }
+                    }
+                    if (self.voices.length === 0) { clearInterval(self.gc); self.gc = null; }
+                }, 30);
+            },
+
+            // Немедленно оборвать всё (стоп/пауза плеера).
+            stopAll: function () {
+                const now = this.ctx ? this.ctx.currentTime : 0;
+                for (let i = 0; i < this.voices.length; i++) {
+                    try { this.voices[i].src.stop(now); } catch (e) { /* no-op */ }
+                }
+                this.voices = [];
+                if (this.gc) { clearInterval(this.gc); this.gc = null; }
+            },
+        };
+
+        function ensureHighlightLayer() {
+            let layer = el('note-highlights');
+            if (!layer) {
+                layer = document.createElement('div');
+                layer.id = 'note-highlights';
+                el('notation-container').appendChild(layer);
+            }
+            return layer;
+        }
+
+        // --- Транспорт: scheduler + note-synced playhead + подсветка -------
+        const Playback = {
+            playing: false,
+            comp: null,
+            metronome: false,
+            secPerQuarter: 0.5,
+            startTime: 0,        // ctx.currentTime в момент beat 0
+            lookahead: null,     // setInterval-«насос» упреждения
+            raf: null,
+            nextEvent: 0,        // указатель в comp.events
+            nextClickBeat: 0,    // следующая доля метронома (в долях такта)
+            primaryEvents: [],   // события главного голоса (для playhead, c rest)
+            _hl: {},             // активные элементы подсветки по noteId
+
+            isPlaying: function () { return this.playing; },
+            setMetronome: function (on) { this.metronome = !!on; },
+
+            currentBeat: function () {
+                const ctx = AudioEngine.ctx;
+                if (!ctx) return 0;
+                return (ctx.currentTime - this.startTime) / this.secPerQuarter;
+            },
+            secForBeat: function (q) { return this.startTime + q * this.secPerQuarter; },
+
+            _filterPrimary: function () {
+                const pv = this.comp.primaryVoice;
+                this.primaryEvents = this.comp.events.filter(
+                    function (e) { return e.voiceId === pv; });
+            },
+
+            // вызывается из render(): пересобрать события под правки в редакторе
+            onRender: function () {
+                if (!this.playing || !lastPayload) return;
+                const curBeat = this.currentBeat();
+                this.comp = compilePlayback(lastPayload);
+                this._filterPrimary();
+                this.nextEvent = 0;
+                while (this.nextEvent < this.comp.events.length &&
+                       this.comp.events[this.nextEvent].startBeat < curBeat) this.nextEvent++;
+            },
+
+            start: function (payload, tempo) {
+                if (!payload) return;
+                const ctx = AudioEngine.ensure();
+                if (!ctx) { showError('Web Audio недоступен в этом WebView.'); return; }
+                AudioEngine.resume();
+                this.stop(true); // сброс прежней сессии без снятия активности UI
+                this.secPerQuarter = 60 / (Number(tempo) || 120);
+                this.comp = compilePlayback(payload);
+                this._filterPrimary();
+                if (this.comp.events.length === 0) return;
+                this.playing = true;
+                this.nextEvent = 0;
+                this.nextClickBeat = 0;
+                this.startTime = ctx.currentTime + 0.08; // запас на планирование
+                el('playhead').classList.add('active');
+                const self = this;
+                this.lookahead = setInterval(function () { self._schedule(); }, 25);
+                this._schedule();
+                this.raf = requestAnimationFrame(function () { self._frame(); });
+            },
+
+            _schedule: function () {
+                const ctx = AudioEngine.ctx; if (!ctx || !this.playing) return;
+                const horizon = ctx.currentTime + 0.12;
+                const ev = this.comp.events;
+
+                while (this.nextEvent < ev.length &&
+                       this.secForBeat(ev[this.nextEvent].startBeat) < horizon) {
+                    const e = ev[this.nextEvent];
+                    const when = Math.max(ctx.currentTime, this.secForBeat(e.startBeat));
+                    if (!e.rest && e.keys.length) {
+                        if (this.comp.isDrums) {
+                            for (let k = 0; k < e.keys.length; k++)
+                                AudioEngine.playDrum(drumType(e.keys[k]), when);
+                        } else {
+                            const durS = e.durationBeats * this.secPerQuarter;
+                            for (let k = 0; k < e.keys.length; k++)
+                                AudioEngine.playPiano(keyToMidi(e.keys[k]), when, durS, e.velocity);
+                        }
+                    }
+                    this.nextEvent++;
+                }
+
+                // метроном: доля = 4/beatValue четвертей, акцент на доле 0 такта.
+                // Счётчик двигаем всегда — звучит только при включённом метрономе.
+                const beatQ = 4 / this.comp.beatValue;
+                while (this.nextClickBeat * beatQ <= this.comp.totalBeats &&
+                       this.secForBeat(this.nextClickBeat * beatQ) < horizon) {
+                    if (this.metronome) {
+                        const when = this.secForBeat(this.nextClickBeat * beatQ);
+                        if (when >= ctx.currentTime) {
+                            const accent = (this.nextClickBeat % this.comp.beats) === 0;
+                            AudioEngine.click(when, accent);
+                        }
+                    }
+                    this.nextClickBeat++;
+                }
+
+                if (this.nextEvent >= ev.length &&
+                    ctx.currentTime > this.secForBeat(this.comp.totalBeats) + 0.05) {
+                    this.stop();
+                    if (window.flutter_inappwebview)
+                        window.flutter_inappwebview.callHandler('onPlaybackEnded');
+                }
+            },
+
+            _frame: function () {
+                if (!this.playing) return;
+                const curBeat = this.currentBeat();
+                this._positionPlayhead(curBeat);
+                this._highlight(curBeat);
+                const self = this;
+                this.raf = requestAnimationFrame(function () { self._frame(); });
+            },
+
+            _rowOf: function (measureIndex) {
+                if (!lastLayout || !lastLayout.perRow) return 0;
+                return Math.floor(measureIndex / lastLayout.perRow);
+            },
+            _measureOf: function (noteId) { return noteId.split(':')[0] | 0; },
+
+            _positionPlayhead: function (curBeat) {
+                const ph = el('playhead');
+                const pe = this.primaryEvents;
+                if (pe.length === 0) return;
+                let k = 0;
+                while (k + 1 < pe.length && pe[k + 1].startBeat <= curBeat) k++;
+                const cur = pe[k];
+                const hb = noteHitIndex[cur.noteId];
+                if (!hb) return;
+                let x = hb.x + hb.w / 2;
+                const nxt = pe[k + 1];
+                if (nxt) {
+                    const nb = noteHitIndex[nxt.noteId];
+                    const sameRow = nb &&
+                        this._rowOf(this._measureOf(nxt.noteId)) ===
+                        this._rowOf(this._measureOf(cur.noteId));
+                    if (nb && sameRow) {
+                        const span = nxt.startBeat - cur.startBeat;
+                        const frac = span > 0
+                            ? Math.min(1, Math.max(0, (curBeat - cur.startBeat) / span)) : 0;
+                        x += frac * ((nb.x + nb.w / 2) - (hb.x + hb.w / 2));
+                    }
+                }
+                const rowH = lastLayout ? lastLayout.rowH : 200;
+                const margin = lastLayout ? lastLayout.margin : 8;
+                const row = this._rowOf(this._measureOf(cur.noteId));
+                ph.style.left = (PAD + x) + 'px';
+                ph.style.top = (PAD + margin + row * rowH) + 'px';
+                ph.style.height = (rowH - 8) + 'px';
+            },
+
+            _highlight: function (curBeat) {
+                const layer = ensureHighlightLayer();
+                const active = {};
+                const ev = this.comp.events;
+                for (let i = 0; i < ev.length; i++) {
+                    const e = ev[i];
+                    if (e.startBeat > curBeat) break; // отсортировано по началу
+                    if (e.rest || !e.keys.length) continue;
+                    if (curBeat < e.startBeat + e.durationBeats) active[e.noteId] = true;
+                }
+                for (const id in this._hl) {
+                    if (!active[id]) {
+                        if (this._hl[id].parentNode) layer.removeChild(this._hl[id]);
+                        delete this._hl[id];
+                    }
+                }
+                for (const id in active) {
+                    if (this._hl[id]) continue;
+                    const hb = noteHitIndex[id];
+                    if (!hb) continue;
+                    const d = document.createElement('div');
+                    d.className = 'note-hl';
+                    d.style.left = (PAD + hb.x - 3) + 'px';
+                    d.style.top = (PAD + hb.y - 3) + 'px';
+                    d.style.width = (hb.w + 6) + 'px';
+                    d.style.height = (hb.h + 6) + 'px';
+                    layer.appendChild(d);
+                    this._hl[id] = d;
+                }
+            },
+
+            stop: function (keepActive) {
+                if (this.lookahead) { clearInterval(this.lookahead); this.lookahead = null; }
+                if (this.raf) { cancelAnimationFrame(this.raf); this.raf = null; }
+                if (!keepActive) {
+                    this.playing = false;
+                    el('playhead').classList.remove('active');
+                    const layer = el('note-highlights');
+                    if (layer) layer.innerHTML = '';
+                    this._hl = {};
+                    try { SampledPiano.stopAll(); } catch (e) { /* no-op */ }
+                }
+            },
+        };
 
         // =================================================================
         //  Промышленная постраничная вёрстка A4 (Justification)
@@ -652,21 +1247,33 @@
                     return 0;
                 }
             },
+
+            // Метроном: вкл/выкл. Состояние сохраняется между запусками плеера.
+            setMetronome: function (on) {
+                try { Playback.setMetronome(on); } catch (e) { /* no-op */ }
+            },
+
+            // Предзагрузка сэмплов концертного рояля (локальный сервер, оффлайн).
+            // Идемпотентно: повторные вызовы безопасны. Без сэмплов плеер
+            // продолжит работать на синтез-fallback.
+            loadPiano: function () {
+                const ctx = AudioEngine.ensure();
+                if (ctx) SampledPiano.load(ctx, AudioEngine.master);
+            },
+
+            // Демпфер-педаль (sustain): держит звучащие ноты до отпускания.
+            setSustain: function (on) {
+                try { SampledPiano.setSustain(on); } catch (e) { /* no-op */ }
+            },
         };
 
-        // Сохраняем существующий контракт плеера без изменения сигнатуры.
+        // Контракт плеера сохранён: 'PLAY' (с tempo) запускает воспроизведение
+        // текущей партитуры с начала, 'PAUSE' останавливает.
         window.handlePlaybackCommand = function (action, value) {
-            const playhead = el('playhead');
             if (action === 'PLAY') {
-                PLAY.isPlaying = true;
-                PLAY.tempo = Number(value) || 120;
-                playhead.classList.add('active');
-                if (PLAY.raf) cancelAnimationFrame(PLAY.raf);
-                animatePlayhead();
+                Playback.start(lastPayload, value);
             } else if (action === 'PAUSE') {
-                PLAY.isPlaying = false;
-                if (PLAY.raf) { cancelAnimationFrame(PLAY.raf); PLAY.raf = null; }
-                playhead.classList.remove('active');
+                Playback.stop();
             }
         };
 

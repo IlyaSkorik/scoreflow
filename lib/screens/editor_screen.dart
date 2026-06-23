@@ -31,11 +31,20 @@ class _EditorScreenState extends State<EditorScreen> {
   final EditorCursor _cursor = EditorCursor();
   String _duration = 'q';
   bool _isPlaying = false;
+  bool _metronome = false;
+  bool _sustain = false;
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    // Останавливаем звук при выходе из редактора.
+    _web?.evaluateJavascript(source: "window.handlePlaybackCommand('PAUSE', 0);");
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -49,6 +58,7 @@ class _EditorScreenState extends State<EditorScreen> {
     _cursor.index = _voiceOf(s, 0, _cursor.voice).length - 1;
     setState(() => _score = s);
     _render();
+    _maybeLoadPiano();
   }
 
   // --- доступ к данным -------------------------------------------------
@@ -260,6 +270,30 @@ class _EditorScreenState extends State<EditorScreen> {
     _sendPlayback(_isPlaying ? 'PLAY' : 'PAUSE');
   }
 
+  void _toggleMetronome() {
+    setState(() => _metronome = !_metronome);
+    _web?.evaluateJavascript(
+      source: 'window.ScoreFlow && window.ScoreFlow.setMetronome($_metronome);',
+    );
+  }
+
+  void _toggleSustain() {
+    setState(() => _sustain = !_sustain);
+    _web?.evaluateJavascript(
+      source: 'window.ScoreFlow && window.ScoreFlow.setSustain($_sustain);',
+    );
+  }
+
+  /// Предзагрузка сэмплов концертного рояля (только для фортепиано).
+  /// Идемпотентно — повторные вызовы безопасны.
+  void _maybeLoadPiano() {
+    if (!_ready || _web == null) return;
+    if (_score?.instrument != InstrumentType.piano) return;
+    _web!.evaluateJavascript(
+      source: 'window.ScoreFlow && window.ScoreFlow.loadPiano();',
+    );
+  }
+
   Future<void> _rename() async {
     final ctrl = TextEditingController(text: _score!.title);
     final title = await showDialog<String>(
@@ -366,6 +400,9 @@ class _EditorScreenState extends State<EditorScreen> {
                   javaScriptEnabled: true,
                   transparentBackground: false,
                   supportZoom: false,
+                  // Разрешаем Web Audio стартовать без прямого DOM-жеста
+                  // (воспроизведение запускается через мост из Flutter).
+                  mediaPlaybackRequiresUserGesture: false,
                 ),
                 onWebViewCreated: (c) {
                   _web = c;
@@ -382,10 +419,20 @@ class _EditorScreenState extends State<EditorScreen> {
                       );
                     },
                   );
+                  // Движок сообщает об окончании воспроизведения -> сброс кнопки.
+                  c.addJavaScriptHandler(
+                    handlerName: 'onPlaybackEnded',
+                    callback: (args) {
+                      if (mounted && _isPlaying) {
+                        setState(() => _isPlaying = false);
+                      }
+                    },
+                  );
                 },
                 onLoadStop: (c, url) {
                   _ready = true;
                   _render();
+                  _maybeLoadPiano();
                 },
                 onReceivedError: (c, request, error) => debugPrint(
                     'WebView error: ${error.type} ${error.description} (${request.url})'),
@@ -413,11 +460,16 @@ class _EditorScreenState extends State<EditorScreen> {
       bottomNavigationBar: _PlaybackBar(
         tempo: score.tempo.toDouble(),
         isPlaying: _isPlaying,
+        metronomeOn: _metronome,
+        showSustain: score.instrument == InstrumentType.piano,
+        sustainOn: _sustain,
         onTempo: (v) {
           _commit(() => score.tempo = v.round());
           if (_isPlaying) _sendPlayback('PLAY');
         },
         onTogglePlay: _togglePlay,
+        onToggleMetronome: _toggleMetronome,
+        onToggleSustain: _toggleSustain,
       ),
     );
   }
@@ -868,14 +920,24 @@ class _DrumPad extends StatelessWidget {
 class _PlaybackBar extends StatelessWidget {
   final double tempo;
   final bool isPlaying;
+  final bool metronomeOn;
+  final bool showSustain;
+  final bool sustainOn;
   final ValueChanged<double> onTempo;
   final VoidCallback onTogglePlay;
+  final VoidCallback onToggleMetronome;
+  final VoidCallback onToggleSustain;
 
   const _PlaybackBar({
     required this.tempo,
     required this.isPlaying,
+    required this.metronomeOn,
+    required this.showSustain,
+    required this.sustainOn,
     required this.onTempo,
     required this.onTogglePlay,
+    required this.onToggleMetronome,
+    required this.onToggleSustain,
   });
 
   @override
@@ -883,6 +945,21 @@ class _PlaybackBar extends StatelessWidget {
     return BottomAppBar(
       child: Row(
         children: [
+          IconButton(
+            tooltip: 'Метроном',
+            isSelected: metronomeOn,
+            icon: const Icon(Icons.av_timer),
+            color: metronomeOn ? Theme.of(context).colorScheme.primary : null,
+            onPressed: onToggleMetronome,
+          ),
+          if (showSustain)
+            IconButton(
+              tooltip: 'Демпфер-педаль (sustain)',
+              isSelected: sustainOn,
+              icon: const Icon(Icons.commit), // символ удержания/педали
+              color: sustainOn ? Theme.of(context).colorScheme.primary : null,
+              onPressed: onToggleSustain,
+            ),
           const Icon(Icons.speed, size: 20),
           Expanded(
             child: Slider(
