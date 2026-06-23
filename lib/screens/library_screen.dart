@@ -52,6 +52,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       id: const Uuid().v4(),
       title: result.title,
       instrument: result.instrument,
+      timeSignature: result.timeSignature,
       now: DateTime.now(),
     );
     await widget.repository.save(score);
@@ -182,7 +183,8 @@ class _EmptyState extends StatelessWidget {
 class _NewScoreSpec {
   final String title;
   final InstrumentType instrument;
-  _NewScoreSpec(this.title, this.instrument);
+  final TimeSignature timeSignature;
+  _NewScoreSpec(this.title, this.instrument, this.timeSignature);
 }
 
 class _NewScoreDialog extends StatefulWidget {
@@ -192,48 +194,146 @@ class _NewScoreDialog extends StatefulWidget {
 }
 
 class _NewScoreDialogState extends State<_NewScoreDialog> {
+  /// Готовые размеры. `null` — режим «свой» с ручным вводом.
+  static const _presets = <TimeSignature?>[
+    TimeSignature(4, 4),
+    TimeSignature(3, 4),
+    TimeSignature(2, 4),
+    TimeSignature(6, 8),
+    null,
+  ];
+
+  /// Допустимые знаменатели (длительность доли) в музыкальной нотации.
+  static const _beatValues = [1, 2, 4, 8, 16];
+
   final _titleCtrl = TextEditingController();
+  final _beatsCtrl = TextEditingController(text: '4');
   InstrumentType _instrument = InstrumentType.piano;
+  TimeSignature? _preset = TimeSignature.common;
+  int _customBeatValue = 4;
 
   @override
   void dispose() {
     _titleCtrl.dispose();
+    _beatsCtrl.dispose();
     super.dispose();
   }
+
+  bool get _isCustom => _preset == null;
+
+  /// Итоговый размер: пресет или собранный из полей ручного ввода.
+  TimeSignature get _timeSignature {
+    if (!_isCustom) return _preset!;
+    final beats = int.tryParse(_beatsCtrl.text.trim()) ?? 0;
+    return TimeSignature(beats, _customBeatValue);
+  }
+
+  bool get _isValid {
+    final ts = _timeSignature;
+    return ts.beats >= 1 && ts.beats <= 32;
+  }
+
+  String _presetLabel(TimeSignature? p) => p == null ? 'Свой' : p.vex;
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text('Новая партитура'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          TextField(
-            controller: _titleCtrl,
-            autofocus: true,
-            decoration: const InputDecoration(
-              labelText: 'Название',
-              hintText: 'Например: Этюд №1',
+      content: SizedBox(
+        width: double.maxFinite,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+            TextField(
+              controller: _titleCtrl,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: 'Название',
+                hintText: 'Например: Этюд №1',
+              ),
             ),
-          ),
-          const SizedBox(height: 16),
-          SegmentedButton<InstrumentType>(
-            segments: const [
-              ButtonSegment(
-                value: InstrumentType.piano,
-                label: Text('Клавишные'),
-                icon: Icon(Icons.piano),
+            const SizedBox(height: 16),
+            Text('Инструмент', style: Theme.of(context).textTheme.labelLarge),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final i in InstrumentType.values)
+                  ChoiceChip(
+                    avatar: Icon(
+                      i == InstrumentType.drums ? Icons.album : Icons.piano,
+                      size: 18,
+                    ),
+                    label: Text(i.label),
+                    selected: _instrument == i,
+                    onSelected: (_) => setState(() => _instrument = i),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            Text('Размер такта',
+                style: Theme.of(context).textTheme.labelLarge),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final p in _presets)
+                  ChoiceChip(
+                    label: Text(_presetLabel(p)),
+                    selected: _preset == p,
+                    onSelected: (_) => setState(() => _preset = p),
+                  ),
+              ],
+            ),
+            if (_isCustom) ...[
+              const SizedBox(height: 12),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  SizedBox(
+                    width: 72,
+                    child: TextField(
+                      controller: _beatsCtrl,
+                      keyboardType: TextInputType.number,
+                      textAlign: TextAlign.center,
+                      onChanged: (_) => setState(() {}),
+                      decoration: const InputDecoration(
+                        labelText: 'Долей',
+                      ),
+                    ),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 10),
+                    child: Text('/', style: TextStyle(fontSize: 24)),
+                  ),
+                  DropdownButton<int>(
+                    value: _customBeatValue,
+                    items: [
+                      for (final v in _beatValues)
+                        DropdownMenuItem(value: v, child: Text('$v')),
+                    ],
+                    onChanged: (v) =>
+                        setState(() => _customBeatValue = v ?? 4),
+                  ),
+                ],
               ),
-              ButtonSegment(
-                value: InstrumentType.drums,
-                label: Text('Ударные'),
-                icon: Icon(Icons.album),
-              ),
+              if (!_isValid)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    'Введите число долей от 1 до 32',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
             ],
-            selected: {_instrument},
-            onSelectionChanged: (s) => setState(() => _instrument = s.first),
+            ],
           ),
-        ],
+        ),
       ),
       actions: [
         TextButton(
@@ -241,10 +341,12 @@ class _NewScoreDialogState extends State<_NewScoreDialog> {
           child: const Text('Отмена'),
         ),
         FilledButton(
-          onPressed: () => Navigator.pop(
-            context,
-            _NewScoreSpec(_titleCtrl.text, _instrument),
-          ),
+          onPressed: _isValid
+              ? () => Navigator.pop(
+                    context,
+                    _NewScoreSpec(_titleCtrl.text, _instrument, _timeSignature),
+                  )
+              : null,
           child: const Text('Создать'),
         ),
       ],

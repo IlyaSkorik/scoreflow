@@ -144,11 +144,13 @@ class Score {
     required String title,
     required InstrumentType instrument,
     required DateTime now,
+    TimeSignature timeSignature = TimeSignature.common,
   }) =>
       Score(
         id: id,
         title: title.trim().isEmpty ? 'Без названия' : title.trim(),
         instrument: instrument,
+        timeSignature: timeSignature,
         createdAt: now,
         updatedAt: now,
         measures: [Measure.empty(instrument)],

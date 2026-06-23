@@ -57,7 +57,9 @@
 
         const REST_KEY = { treble: 'b/4', bass: 'd/3', percussion: 'b/4' };
         const PLAY = { isPlaying: false, tempo: 120, raf: null };
-        let lastPayload = null; // отрисуем заново при ресайзе
+        let lastPayload = null;   // отрисуем заново при ресайзе
+        let noteHits = [];        // bounding box'ы нот для тап-навигации
+        let tapAttached = false;
 
         function el(id) { return document.getElementById(id); }
 
@@ -89,14 +91,16 @@
         }
 
         // --- Построение тиклов одного голоса -------------------------------
-        function buildVoice(VF, notes, clef, beats, beatValue, cursorIdx) {
+        function buildVoice(VF, notes, clef, beats, beatValue, cursorIdx, measureIndex, voiceId) {
             const tickables = [];
 
             if (!notes || notes.length === 0) {
                 // Пустой такт -> целая пауза, чтобы такт всегда рисовался.
-                tickables.push(new VF.StaveNote({
+                const placeholder = new VF.StaveNote({
                     keys: [REST_KEY[clef]], duration: 'wr', clef: clef,
-                }));
+                });
+                placeholder.__hit = { m: measureIndex, v: voiceId, i: -1 };
+                tickables.push(placeholder);
             } else {
                 notes.forEach((n, i) => {
                     const isRest = !!n.rest;
@@ -114,6 +118,7 @@
                     if (i === cursorIdx) {
                         sn.setStyle({ fillStyle: '#2196F3', strokeStyle: '#2196F3' });
                     }
+                    sn.__hit = { m: measureIndex, v: voiceId, i: i };
                     tickables.push(sn);
                 });
             }
@@ -132,6 +137,7 @@
             }
             const VF = Vex.Flow;
             clearCanvas();
+            noteHits = [];
 
             const container = el('notation-container');
             const width = Math.max(320, container.clientWidth);
@@ -176,7 +182,7 @@
 
                         const cIdx = (cursor.measure === i && cursor.voice === 'perc')
                             ? cursor.index : -1;
-                        const v = buildVoice(VF, m.perc, 'percussion', beats, beatValue, cIdx);
+                        const v = buildVoice(VF, m.perc, 'percussion', beats, beatValue, cIdx, i, 'perc');
                         formatAndDraw(VF, ctx, [v], [stave], measureW, rowStart, isFirst);
                     } else {
                         const treble = new VF.Stave(x, yTop, measureW);
@@ -195,8 +201,8 @@
                             ? cursor.index : -1;
                         const bIdx = (cursor.measure === i && cursor.voice === 'bass')
                             ? cursor.index : -1;
-                        const tv = buildVoice(VF, m.treble, 'treble', beats, beatValue, tIdx);
-                        const bv = buildVoice(VF, m.bass, 'bass', beats, beatValue, bIdx);
+                        const tv = buildVoice(VF, m.treble, 'treble', beats, beatValue, tIdx, i, 'treble');
+                        const bv = buildVoice(VF, m.bass, 'bass', beats, beatValue, bIdx, i, 'bass');
                         formatAndDraw(VF, ctx, [tv, bv], [treble, bass], measureW, rowStart, isFirst);
 
                         if (rowStart) {
@@ -214,6 +220,8 @@
             // плейхед на всю высоту нотного полотна
             const playhead = el('playhead');
             playhead.style.height = (totalH - 16) + 'px';
+
+            attachTapListener();
         }
 
         function formatAndDraw(VF, ctx, voices, staves, measureW, rowStart, isFirst) {
@@ -229,6 +237,46 @@
                 v.draw(ctx, staves[idx]);
                 const beams = VF.Beam.generateBeams(v.getTickables());
                 beams.forEach((b) => b.setContext(ctx).draw());
+
+                // координаты нот для тап-навигации
+                v.getTickables().forEach((t) => {
+                    if (!t.__hit) return;
+                    let bb;
+                    try { bb = t.getBoundingBox(); } catch (e) { return; }
+                    if (!bb) return;
+                    noteHits.push({
+                        m: t.__hit.m, v: t.__hit.v, i: t.__hit.i,
+                        x: bb.getX(), y: bb.getY(), w: bb.getW(), h: bb.getH(),
+                    });
+                });
+            });
+        }
+
+        // Тап по партитуре -> ближайшая нота -> курсор во Flutter.
+        function attachTapListener() {
+            if (tapAttached) return;
+            tapAttached = true;
+            const container = el('notation-container');
+            container.addEventListener('click', function (e) {
+                const svg = container.querySelector('svg');
+                if (!svg || noteHits.length === 0) return;
+                const rect = svg.getBoundingClientRect();
+                const px = e.clientX - rect.left;
+                const py = e.clientY - rect.top;
+
+                let best = null, bestD = Infinity;
+                for (const hh of noteHits) {
+                    const cx = hh.x + hh.w / 2;
+                    const cy = hh.y + hh.h / 2;
+                    const d = (px - cx) * (px - cx) + (py - cy) * (py - cy);
+                    if (d < bestD) { bestD = d; best = hh; }
+                }
+                // порог ~90px, чтобы случайные тапы по полю не дёргали курсор
+                if (best && bestD <= 90 * 90 && window.flutter_inappwebview) {
+                    window.flutter_inappwebview.callHandler('onNoteTap', {
+                        measure: best.m, voice: best.v, index: best.i,
+                    });
+                }
             });
         }
 
