@@ -151,24 +151,57 @@ class _EditorScreenState extends State<EditorScreen> {
 
   // --- операции редактирования ----------------------------------------
 
-  /// Вставляет ноту/паузу в позицию курсора. Соблюдение размера такта
-  /// обеспечивает [_normalize] (вызывается из [_commit]).
+  /// Ввод ноты/паузы («умная замена»):
+  /// - если курсор стоит на паузе — она заполняется новой нотой/паузой
+  ///   (длительность берётся текущая выбранная), курсор остаётся на месте;
+  /// - если курсор на ноте, а следующий слот — пауза, заполняется она
+  ///   (курсор переходит на неё);
+  /// - иначе нота вставляется ПОСЛЕ курсора (последовательный набор).
+  /// Соблюдение размера такта обеспечивает [_normalize] (из [_commit]).
   void _insertNote({required List<String> keys, bool rest = false}) {
     _commit(() {
       final notes = _activeVoice;
-      final pos = (_cursor.index + 1).clamp(0, notes.length);
+      final i = _cursor.index;
+
+      // 1) курсор на паузе -> заполняем её
+      if (i >= 0 && i < notes.length && notes[i].rest) {
+        notes[i]
+          ..keys = keys
+          ..rest = rest
+          ..duration = _duration;
+        return;
+      }
+
+      // 2) курсор на ноте, следующий слот — пауза -> заполняем её
+      final next = i + 1;
+      if (next >= 0 && next < notes.length && notes[next].rest) {
+        notes[next]
+          ..keys = keys
+          ..rest = rest
+          ..duration = _duration;
+        _cursor.index = next;
+        return;
+      }
+
+      // 3) иначе вставляем после курсора
+      final pos = next.clamp(0, notes.length);
       notes.insert(pos, MusicNote(keys: keys, duration: _duration, rest: rest));
       _cursor.index = pos;
     });
   }
 
+  /// Удаление под курсором: нота превращается в паузу той же длительности
+  /// (ритм не «съезжает»). Пауза остаётся на месте как держатель ритма —
+  /// удалять её нечего.
   void _deleteAtCursor() {
     final notes = _activeVoice;
     if (notes.isEmpty || _cursor.index < 0) return;
+    final n = notes[_cursor.index];
+    if (n.rest) return;
     _commit(() {
-      notes.removeAt(_cursor.index);
-      _cursor.index =
-          notes.isEmpty ? -1 : (_cursor.index - 1).clamp(0, notes.length - 1);
+      n
+        ..keys = []
+        ..rest = true;
     });
   }
 

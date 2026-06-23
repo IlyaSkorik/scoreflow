@@ -183,7 +183,7 @@
                         const cIdx = (cursor.measure === i && cursor.voice === 'perc')
                             ? cursor.index : -1;
                         const v = buildVoice(VF, m.perc, 'percussion', beats, beatValue, cIdx, i, 'perc');
-                        formatAndDraw(VF, ctx, [v], [stave], measureW, rowStart, isFirst);
+                        formatAndDraw(VF, ctx, [v], [stave], measureW, rowStart, isFirst, beats, beatValue);
                     } else {
                         const treble = new VF.Stave(x, yTop, measureW);
                         const bass = new VF.Stave(x, yTop + bassDY, measureW);
@@ -203,7 +203,7 @@
                             ? cursor.index : -1;
                         const tv = buildVoice(VF, m.treble, 'treble', beats, beatValue, tIdx, i, 'treble');
                         const bv = buildVoice(VF, m.bass, 'bass', beats, beatValue, bIdx, i, 'bass');
-                        formatAndDraw(VF, ctx, [tv, bv], [treble, bass], measureW, rowStart, isFirst);
+                        formatAndDraw(VF, ctx, [tv, bv], [treble, bass], measureW, rowStart, isFirst, beats, beatValue);
 
                         if (rowStart) {
                             new VF.StaveConnector(treble, bass)
@@ -224,7 +224,16 @@
             attachTapListener();
         }
 
-        function formatAndDraw(VF, ctx, voices, staves, measureW, rowStart, isFirst) {
+        // Группы для бимовки: по одной доле в простых размерах и по три
+        // восьмых в составных (6/8, 9/8, 12/8). Возвращает массив VF.Fraction.
+        function beamGroups(VF, beats, beatValue) {
+            if (beatValue === 8 && beats % 3 === 0) {
+                return [new VF.Fraction(3, 8)];
+            }
+            return [new VF.Fraction(1, beatValue)];
+        }
+
+        function formatAndDraw(VF, ctx, voices, staves, measureW, rowStart, isFirst, beats, beatValue) {
             const fmt = new VF.Formatter();
             voices.forEach((v) => fmt.joinVoices([v]));
             let pad = 24;
@@ -233,9 +242,16 @@
             const fw = Math.max(50, measureW - pad);
             fmt.format(voices, fw);
 
+            const groups = beamGroups(VF, beats, beatValue);
             voices.forEach((v, idx) => {
+                // Балки создаём ДО отрисовки нот: generateBeams помечает ноты
+                // как забимованные, и тогда v.draw не рисует им одиночные флажки.
+                const beams = VF.Beam.generateBeams(v.getTickables(), {
+                    groups: groups,
+                    beam_rests: false,
+                    maintain_stem_directions: true,
+                });
                 v.draw(ctx, staves[idx]);
-                const beams = VF.Beam.generateBeams(v.getTickables());
                 beams.forEach((b) => b.setContext(ctx).draw());
 
                 // координаты нот для тап-навигации
