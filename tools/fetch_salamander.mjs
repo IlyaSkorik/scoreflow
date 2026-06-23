@@ -29,8 +29,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PIANO_DIR = resolve(__dirname, '..', 'assets', 'www', 'piano');
 const MANIFEST = join(PIANO_DIR, 'manifest.json');
 
-// База-источник сэмплов (можно переопределить через env). Завершается '/'.
-const BASE = (process.env.SALAMANDER_BASE
+// База-источник сэмплов: флаг --base=URL (кроссплатформенно) или env
+// SALAMANDER_BASE; по умолчанию — публичный набор Salamander. Завершается '/'.
+const argBase = (process.argv.find((a) => a.startsWith('--base=')) || '').slice(7);
+const BASE = (argBase || process.env.SALAMANDER_BASE
   || 'https://tonejs.github.io/audio/salamander/').replace(/\/?$/, '/');
 
 async function exists(p) {

@@ -32,3 +32,5 @@ flutter:
     # Сэмплы концертного рояля (Salamander, оффлайн). Файлы кладёт
     # tools/fetch_salamander.mjs; manifest.json присутствует всегда.
     - assets/www/piano/
+    # Сэмплы ударной установки (оффлайн). Файлы кладёт tools/fetch_drums.mjs.
+    - assets/www/drums/

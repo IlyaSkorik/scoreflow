@@ -398,14 +398,32 @@
             return (parseInt(parts[1], 10) + 1) * 12 + semis;
         }
 
-        // База перкуссии "letter/octave" (без головки) -> тип ударного
-        const DRUM_MAP = {
-            'f/4': 'kick', 'c/5': 'snare', 'g/5': 'hihat', 'e/5': 'tom1',
-            'd/5': 'tom2', 'a/4': 'ftom', 'a/5': 'crash', 'f/5': 'ride',
+        // Полный ключ VexFlow "линия/октава[/головка]" -> канонический ударный.
+        // Головка различает артикуляции на одной линии (хай-хэт x2/x3, и т.д.).
+        const DRUM_FULL = {
+            'f/4': 'kick',
+            'c/5': 'snare',
+            'g/5/x2': 'hihat_closed',
+            'g/5/x3': 'hihat_open',
+            'd/4/x2': 'hihat_pedal',
+            'a/5/x2': 'crash1',
+            'b/5/x2': 'crash2',
+            'f/5/x2': 'ride',
+            'f/5/d0': 'ride_bell',
+            'e/5': 'tom_high',
+            'd/5': 'tom_mid',
+            'a/4': 'tom_floor',
+        };
+        // Запасное сопоставление по позиции — для старых партитур без головки.
+        const DRUM_BASE = {
+            'f/4': 'kick', 'c/5': 'snare', 'g/5': 'hihat_closed', 'd/4': 'hihat_pedal',
+            'e/5': 'tom_high', 'd/5': 'tom_mid', 'a/4': 'tom_floor',
+            'a/5': 'crash1', 'b/5': 'crash2', 'f/5': 'ride',
         };
         function drumType(key) {
             const p = key.split('/');
-            return DRUM_MAP[p[0] + '/' + p[1]] || 'snare';
+            const full = p[0] + '/' + p[1] + (p[2] ? '/' + p[2] : '');
+            return DRUM_FULL[full] || DRUM_BASE[p[0] + '/' + p[1]] || 'snare';
         }
 
         // --- Playback Compiler ---------------------------------------------
@@ -524,49 +542,71 @@
                 o1.stop(end + 0.03); o2.stop(end + 0.03);
             },
 
-            playDrum: function (type, when) {
+            // Удар: реальный сэмпл, если набор загружен; иначе синтез-fallback.
+            playDrum: function (type, when, velocity) {
+                if (SampledDrums.noteOn(type, when, velocity)) return;
+                this._synthDrum(type, when, velocity);
+            },
+
+            // Синтез-fallback ударных (без сэмплов). Покрывает все 12 партий;
+            // velocity масштабирует громкость.
+            _synthDrum: function (type, when, velocity) {
                 const ctx = this.ctx; if (!ctx) return;
+                const vel = velocity == null ? 0.78 : velocity;
                 if (type === 'kick') {
                     const o = ctx.createOscillator(); const g = ctx.createGain();
                     o.type = 'sine';
                     o.frequency.setValueAtTime(160, when);
                     o.frequency.exponentialRampToValueAtTime(50, when + 0.12);
-                    g.gain.setValueAtTime(0.9, when);
+                    g.gain.setValueAtTime(0.9 * vel, when);
                     g.gain.exponentialRampToValueAtTime(0.0001, when + 0.18);
                     o.connect(g); g.connect(this.master);
                     o.start(when); o.stop(when + 0.2);
                     return;
                 }
-                if (type === 'snare' || type === 'tom1' || type === 'tom2' || type === 'ftom') {
-                    const tone = { snare: 0, tom1: 320, tom2: 240, ftom: 160 }[type];
+                if (type === 'snare' || type === 'tom_high' || type === 'tom_mid' || type === 'tom_floor') {
+                    const tone = { snare: 0, tom_high: 320, tom_mid: 240, tom_floor: 160 }[type];
                     const s = this.noiseSource(); const ng = ctx.createGain();
                     const bp = ctx.createBiquadFilter(); bp.type = 'bandpass';
                     bp.frequency.value = type === 'snare' ? 1800 : 400;
                     s.connect(bp); bp.connect(ng); ng.connect(this.master);
                     const decay = type === 'snare' ? 0.18 : 0.12;
-                    ng.gain.setValueAtTime(type === 'snare' ? 0.7 : 0.4, when);
+                    ng.gain.setValueAtTime((type === 'snare' ? 0.7 : 0.4) * vel, when);
                     ng.gain.exponentialRampToValueAtTime(0.0001, when + decay);
                     s.start(when); s.stop(when + 0.25);
                     if (tone) {
                         const o = ctx.createOscillator(); const g = ctx.createGain();
                         o.type = 'sine'; o.frequency.setValueAtTime(tone, when);
                         o.frequency.exponentialRampToValueAtTime(tone * 0.6, when + 0.18);
-                        g.gain.setValueAtTime(0.6, when);
+                        g.gain.setValueAtTime(0.6 * vel, when);
                         g.gain.exponentialRampToValueAtTime(0.0001, when + 0.22);
                         o.connect(g); g.connect(this.master);
                         o.start(when); o.stop(when + 0.24);
                     }
                     return;
                 }
-                // тарелки/хай-хэт: фильтрованный шум
-                const decay = type === 'hihat' ? 0.06 : (type === 'ride' ? 0.4 : 0.7);
+                // тарелки / хай-хэт: фильтрованный шум с разным затуханием
+                const DEC = {
+                    hihat_closed: 0.05, hihat_pedal: 0.09, hihat_open: 0.45,
+                    ride: 0.5, ride_bell: 0.4, crash1: 0.9, crash2: 1.1,
+                };
+                const decay = DEC[type] != null ? DEC[type] : 0.5;
+                const isHat = type.indexOf('hihat') === 0;
                 const s = this.noiseSource(); const hp = ctx.createBiquadFilter();
-                hp.type = 'highpass'; hp.frequency.value = type === 'hihat' ? 7000 : 5000;
+                hp.type = 'highpass'; hp.frequency.value = isHat ? 7000 : 5000;
                 const g = ctx.createGain();
                 s.connect(hp); hp.connect(g); g.connect(this.master);
-                g.gain.setValueAtTime(type === 'hihat' ? 0.5 : 0.4, when);
+                g.gain.setValueAtTime((isHat ? 0.5 : 0.4) * vel, when);
                 g.gain.exponentialRampToValueAtTime(0.0001, when + decay);
                 s.start(when); s.stop(when + decay + 0.05);
+                if (type === 'ride_bell') { // тональный «пинг» колокола
+                    const o = ctx.createOscillator(); const og = ctx.createGain();
+                    o.type = 'square'; o.frequency.value = 880;
+                    og.gain.setValueAtTime(0.18 * vel, when);
+                    og.gain.exponentialRampToValueAtTime(0.0001, when + 0.4);
+                    o.connect(og); og.connect(this.master);
+                    o.start(when); o.stop(when + 0.42);
+                }
             },
 
             click: function (when, accent) {
@@ -741,6 +781,148 @@
             },
         };
 
+        // --- Сэмплерная ударная установка (реальные записи, оффлайн) -------
+        // Sample-based engine на AudioBufferSourceNode: у каждого инструмента
+        // velocity-слои (pp/mf/ff и больше). Полифония БЕЗ обрезания хвостов —
+        // тарелки звучат до естественного затухания. Choke-группы гасят
+        // открытый хай-хэт при закрытом/педальном ударе. Тембр — в самих
+        // сэмплах (никакого синтеза) → нет эффекта «драм-машины».
+        // Сэмплы кладёт tools/fetch_drums.mjs; раздаются локальным сервером.
+        const SampledDrums = {
+            ctx: null, master: null,
+            ready: false, loading: false,
+            kit: {},            // type -> { group, layers:[{loVel,hiVel,buffer}] }
+            voices: [], maxVoices: 64, gc: null,
+
+            load: function (ctx, master) {
+                if (this.ready || this.loading) return Promise.resolve(this.ready);
+                this.ctx = ctx; this.master = master; this.loading = true;
+                const self = this;
+                return fetch('drums/manifest.json', { cache: 'force-cache' })
+                    .then(function (r) { if (!r.ok) throw new Error('нет drums/manifest.json'); return r.json(); })
+                    .then(function (man) {
+                        const base = man.basePath || 'drums/';
+                        const insts = man.instruments || {};
+                        const kit = {};
+                        const tasks = [];
+                        Object.keys(insts).forEach(function (type) {
+                            const def = insts[type];
+                            kit[type] = { group: def.group || null, layers: [] };
+                            (def.layers || []).forEach(function (L) {
+                                const entry = {
+                                    loVel: L.loVel != null ? L.loVel : 0,
+                                    hiVel: L.hiVel != null ? L.hiVel : 127,
+                                    buffer: null,
+                                };
+                                kit[type].layers.push(entry);
+                                tasks.push(fetch(base + L.file)
+                                    .then(function (r) { if (!r.ok) throw new Error(L.file); return r.arrayBuffer(); })
+                                    .then(function (ab) { return ctx.decodeAudioData(ab); })
+                                    .then(function (buf) { entry.buffer = buf; })
+                                    .catch(function () { /* отсутствующий слой -> пропуск */ }));
+                            });
+                        });
+                        return Promise.all(tasks).then(function () { return kit; });
+                    })
+                    .then(function (kit) {
+                        self.kit = kit;
+                        self.ready = Object.keys(kit).some(function (t) {
+                            return kit[t].layers.some(function (L) { return L.buffer; });
+                        });
+                        self.loading = false;
+                        console.log('SampledDrums: инструментов ' + Object.keys(kit).length +
+                            ', готов: ' + self.ready);
+                        return self.ready;
+                    })
+                    .catch(function (e) {
+                        self.loading = false; self.ready = false;
+                        console.log('SampledDrums недоступен, синтез-fallback: ' + e.message);
+                        return false;
+                    });
+            },
+
+            isReady: function () { return this.ready; },
+
+            // Выбор velocity-слоя: по диапазону, иначе ближайший с буфером.
+            _pickLayer: function (inst, vel) {
+                const layers = inst.layers;
+                for (let i = 0; i < layers.length; i++) {
+                    const L = layers[i];
+                    if (L.buffer && vel >= L.loVel && vel <= L.hiVel) return L;
+                }
+                let best = null, bestD = 1e9;
+                for (let i = 0; i < layers.length; i++) {
+                    const L = layers[i];
+                    if (!L.buffer) continue;
+                    const d = Math.abs(vel - (L.loVel + L.hiVel) / 2);
+                    if (d < bestD) { bestD = d; best = L; }
+                }
+                return best;
+            },
+
+            // Гасит звучащие голоса той же choke-группы (открытый хай-хэт при
+            // закрытом ударе). Короткий фейд — без щелчка.
+            _choke: function (group, when) {
+                for (let i = 0; i < this.voices.length; i++) {
+                    const v = this.voices[i];
+                    if (v.group !== group || v.choked) continue;
+                    v.choked = true;
+                    try {
+                        const g = v.g.gain;
+                        g.cancelScheduledValues(when);
+                        g.setValueAtTime(Math.max(0.0001, g.value), when);
+                        g.exponentialRampToValueAtTime(0.0001, when + 0.04);
+                        v.src.stop(when + 0.06);
+                    } catch (e) { /* no-op */ }
+                }
+            },
+
+            // Сэмпл-точный удар. false -> вызывающий уходит в синтез-fallback.
+            noteOn: function (type, when, velocity) {
+                const ctx = this.ctx; if (!ctx || !this.ready) return false;
+                const inst = this.kit[type]; if (!inst) return false;
+                const vel = Math.max(1, Math.min(127,
+                    Math.round((velocity == null ? 0.78 : velocity) * 127)));
+                const L = this._pickLayer(inst, vel); if (!L || !L.buffer) return false;
+                if (inst.group) this._choke(inst.group, when);
+                if (this.voices.length >= this.maxVoices) {
+                    try { this.voices[0].src.stop(when); } catch (e) { /* no-op */ }
+                    this.voices.shift();
+                }
+                const src = ctx.createBufferSource();
+                src.buffer = L.buffer;
+                const g = ctx.createGain();
+                g.gain.value = 0.35 + 0.65 * (vel / 127); // громкость по velocity
+                src.connect(g); g.connect(this.master);
+                src.start(when);                          // хвост звучит ЦЕЛИКОМ
+                const voice = { src: src, g: g, group: inst.group, choked: false, dead: false };
+                src.onended = function () { voice.dead = true; };
+                this.voices.push(voice);
+                this._ensureGc();
+                return true;
+            },
+
+            _ensureGc: function () {
+                if (this.gc) return;
+                const self = this;
+                this.gc = setInterval(function () {
+                    for (let i = self.voices.length - 1; i >= 0; i--) {
+                        if (self.voices[i].dead) self.voices.splice(i, 1);
+                    }
+                    if (self.voices.length === 0) { clearInterval(self.gc); self.gc = null; }
+                }, 50);
+            },
+
+            stopAll: function () {
+                const now = this.ctx ? this.ctx.currentTime : 0;
+                for (let i = 0; i < this.voices.length; i++) {
+                    try { this.voices[i].src.stop(now); } catch (e) { /* no-op */ }
+                }
+                this.voices = [];
+                if (this.gc) { clearInterval(this.gc); this.gc = null; }
+            },
+        };
+
         function ensureHighlightLayer() {
             let layer = el('note-highlights');
             if (!layer) {
@@ -825,7 +1007,7 @@
                     if (!e.rest && e.keys.length) {
                         if (this.comp.isDrums) {
                             for (let k = 0; k < e.keys.length; k++)
-                                AudioEngine.playDrum(drumType(e.keys[k]), when);
+                                AudioEngine.playDrum(drumType(e.keys[k]), when, e.velocity);
                         } else {
                             const durS = e.durationBeats * this.secPerQuarter;
                             for (let k = 0; k < e.keys.length; k++)
@@ -945,6 +1127,7 @@
                     if (layer) layer.innerHTML = '';
                     this._hl = {};
                     try { SampledPiano.stopAll(); } catch (e) { /* no-op */ }
+                    try { SampledDrums.stopAll(); } catch (e) { /* no-op */ }
                 }
             },
         };
@@ -1264,6 +1447,13 @@
             // Демпфер-педаль (sustain): держит звучащие ноты до отпускания.
             setSustain: function (on) {
                 try { SampledPiano.setSustain(on); } catch (e) { /* no-op */ }
+            },
+
+            // Предзагрузка сэмплов ударной установки (локальный сервер, оффлайн).
+            // Идемпотентно. Без сэмплов плеер играет синтез-fallback.
+            loadDrums: function () {
+                const ctx = AudioEngine.ensure();
+                if (ctx) SampledDrums.load(ctx, AudioEngine.master);
             },
         };
 

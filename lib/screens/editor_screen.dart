@@ -58,7 +58,7 @@ class _EditorScreenState extends State<EditorScreen> {
     _cursor.index = _voiceOf(s, 0, _cursor.voice).length - 1;
     setState(() => _score = s);
     _render();
-    _maybeLoadPiano();
+    _maybeLoadSamples();
   }
 
   // --- доступ к данным -------------------------------------------------
@@ -284,13 +284,18 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
-  /// Предзагрузка сэмплов концертного рояля (только для фортепиано).
+  /// Предзагрузка сэмплов под инструмент партитуры (рояль / ударные).
   /// Идемпотентно — повторные вызовы безопасны.
-  void _maybeLoadPiano() {
+  void _maybeLoadSamples() {
     if (!_ready || _web == null) return;
-    if (_score?.instrument != InstrumentType.piano) return;
+    final fn = switch (_score?.instrument) {
+      InstrumentType.piano => 'loadPiano',
+      InstrumentType.drums => 'loadDrums',
+      _ => null,
+    };
+    if (fn == null) return;
     _web!.evaluateJavascript(
-      source: 'window.ScoreFlow && window.ScoreFlow.loadPiano();',
+      source: 'window.ScoreFlow && window.ScoreFlow.$fn();',
     );
   }
 
@@ -432,7 +437,7 @@ class _EditorScreenState extends State<EditorScreen> {
                 onLoadStop: (c, url) {
                   _ready = true;
                   _render();
-                  _maybeLoadPiano();
+                  _maybeLoadSamples();
                 },
                 onReceivedError: (c, request, error) => debugPrint(
                     'WebView error: ${error.type} ${error.description} (${request.url})'),

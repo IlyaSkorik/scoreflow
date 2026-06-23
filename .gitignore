@@ -50,3 +50,9 @@ app.*.map.json
 /assets/www/piano/*.ogg
 /assets/www/piano/*.m4a
 /assets/www/piano/*.wav
+
+# Сэмплы ударных — бинарные ассеты, кладёт tools/fetch_drums.mjs.
+/assets/www/drums/*.mp3
+/assets/www/drums/*.ogg
+/assets/www/drums/*.m4a
+/assets/www/drums/*.wav
