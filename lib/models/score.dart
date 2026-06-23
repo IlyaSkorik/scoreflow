@@ -193,6 +193,8 @@ class Score {
   /// Полезная нагрузка для рендер-движка (VexFlow). Содержит позицию курсора,
   /// чтобы движок подсветил активную ноту.
   String renderPayload(EditorCursor cursor) => jsonEncode({
+        'title': title,
+        'composer': composer,
         'instrument': instrument.id,
         'keySignature': keySignature,
         'timeSignature': timeSignature.vex,

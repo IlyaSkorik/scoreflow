@@ -282,6 +282,35 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
+  /// Экспорт в PDF. Движок верстает партитуру по страницам A4 (системная и
+  /// страничная пагинация с выравниванием по краям) векторно в DOM, после
+  /// чего вызывается системная печать — Android/iOS дают «Сохранить в PDF».
+  Future<void> _exportPdf() async {
+    final score = _score;
+    if (score == null || _web == null || !_ready) return;
+    final messenger = ScaffoldMessenger.of(context);
+
+    try {
+      final payload = score.renderPayload(_cursor);
+      final b64 = base64Encode(utf8.encode(payload));
+      final res = await _web!.callAsyncJavaScript(
+        functionBody: 'return window.ScoreFlow.renderPrintB64(b64);',
+        arguments: {'b64': b64},
+      );
+
+      final pages = (res?.value as num?)?.toInt() ?? 0;
+      if (pages <= 0) {
+        throw Exception('не удалось сверстать страницы');
+      }
+
+      await _web!.printCurrentPage();
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(content: Text('Не удалось напечатать: $e')),
+      );
+    }
+  }
+
   // --- UI --------------------------------------------------------------
   @override
   Widget build(BuildContext context) {
@@ -320,11 +349,9 @@ class _EditorScreenState extends State<EditorScreen> {
             },
           ),
           IconButton(
-            tooltip: 'Экспорт в PDF (скоро)',
+            tooltip: 'Экспорт в PDF',
             icon: const Icon(Icons.picture_as_pdf_outlined),
-            onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('PDF-экспорт — в следующей итерации')),
-            ),
+            onPressed: _exportPdf,
           ),
         ],
       ),
