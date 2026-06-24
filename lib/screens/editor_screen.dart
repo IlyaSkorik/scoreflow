@@ -31,6 +31,7 @@ class _EditorScreenState extends State<EditorScreen> {
   final EditorCursor _cursor = EditorCursor();
   String _duration = 'q';
   int _dots = 0; // 0 = без точки, 1 = пунктир (модель расширяема до 2–3)
+  bool _stackMode = false; // Аккорд-режим: ввод наращивает созвучие, не двигая курсор
   bool _isPlaying = false;
   bool _metronome = false;
   bool _sustain = false;
@@ -189,22 +190,44 @@ class _EditorScreenState extends State<EditorScreen> {
 
   // --- операции редактирования ----------------------------------------
 
-  /// Ввод ноты/паузы («умная замена»):
-  /// - если курсор стоит на паузе — она заполняется новой нотой/паузой
-  ///   (длительность берётся текущая выбранная), курсор остаётся на месте;
-  /// - если курсор на ноте, а следующий слот — пауза, заполняется она
-  ///   (курсор переходит на неё);
-  /// - иначе нота вставляется ПОСЛЕ курсора (последовательный набор).
-  /// Соблюдение размера такта обеспечивает [_normalize] (из [_commit]).
+  /// Ввод ноты/паузы.
+  ///
+  /// Основной режим (по умолчанию) — быстрый последовательный набор: ввод
+  /// ноты заполняет текущую/следующую паузу либо вставляется после курсора, и
+  /// курсор движется вперёд (мелодии набираются без лишних нажатий).
+  ///
+  /// Аккорд-режим ([_stackMode], тумблер «Аккорд») — многозвучие: когда курсор
+  /// стоит на ЗВУЧАЩЕЙ ноте, ввод головки добавляет её к этой же ноте, не
+  /// двигая курсор (повторный ввод той же головки — убирает; см. [_toggleKeys]).
+  /// Длительность не меняется — наращиваем созвучие, а не ритм. Механизм общий
+  /// для пиано и ударных. Паузы не стекаются.
+  ///
+  /// «Умная замена» в обоих режимах:
+  /// - курсор на паузе — она заполняется нотой/паузой текущей длительности
+  ///   (курсор остаётся на месте);
+  /// - курсор на ноте, следующий слот — пауза: заполняется она (курсор на неё);
+  /// - иначе вставка ПОСЛЕ курсора.
+  /// Соблюдение размера такта обеспечивает [_normalize].
   void _insertNote({required List<String> keys, bool rest = false}) {
     _commit(() {
       final notes = _activeVoice;
       final i = _cursor.index;
 
+      // 0) аккорд-режим: на звучащей ноте ввод головки наращивает созвучие
+      if (_stackMode &&
+          !rest &&
+          keys.isNotEmpty &&
+          i >= 0 &&
+          i < notes.length &&
+          !notes[i].rest) {
+        _toggleKeys(notes[i], keys);
+        return;
+      }
+
       // 1) курсор на паузе -> заполняем её
       if (i >= 0 && i < notes.length && notes[i].rest) {
         notes[i]
-          ..keys = keys
+          ..keys = _sortedKeys(keys)
           ..rest = rest
           ..duration = _duration
           ..dots = _dots
@@ -216,7 +239,7 @@ class _EditorScreenState extends State<EditorScreen> {
       final next = i + 1;
       if (next >= 0 && next < notes.length && notes[next].rest) {
         notes[next]
-          ..keys = keys
+          ..keys = _sortedKeys(keys)
           ..rest = rest
           ..duration = _duration
           ..dots = _dots
@@ -227,10 +250,45 @@ class _EditorScreenState extends State<EditorScreen> {
 
       // 3) иначе вставляем после курсора
       final pos = next.clamp(0, notes.length);
-      notes.insert(pos,
-          MusicNote(keys: keys, duration: _duration, dots: _dots, rest: rest));
+      notes.insert(
+          pos,
+          MusicNote(
+              keys: _sortedKeys(keys),
+              duration: _duration,
+              dots: _dots,
+              rest: rest));
       _cursor.index = pos;
     });
+  }
+
+  /// Сортирует головки созвучия снизу вверх (требование VexFlow) и снимает
+  /// дубли. Для ударных порядок идёт по линии стана (см. [keyPitchRank]).
+  List<String> _sortedKeys(List<String> keys) {
+    final out = <String>[];
+    for (final k in keys) {
+      if (!out.contains(k)) out.add(k);
+    }
+    out.sort((a, b) => keyPitchRank(a).compareTo(keyPitchRank(b)));
+    return out;
+  }
+
+  /// Toggle головок [keys] у ноты [n]: имеющаяся головка убирается, новая —
+  /// добавляется. Если головок не осталось — нота становится паузой (как при
+  /// «Стереть»). Длительность и точки не трогаем.
+  void _toggleKeys(MusicNote n, List<String> keys) {
+    final set = List<String>.of(n.keys);
+    for (final k in keys) {
+      if (!set.remove(k)) set.add(k);
+    }
+    if (set.isEmpty) {
+      n
+        ..keys = []
+        ..rest = true;
+    } else {
+      n
+        ..keys = _sortedKeys(set)
+        ..rest = false;
+    }
   }
 
   /// Удаление под курсором: нота превращается в паузу той же длительности
@@ -499,10 +557,12 @@ class _EditorScreenState extends State<EditorScreen> {
             cursor: _cursor,
             duration: _duration,
             dots: _dots,
+            stackMode: _stackMode,
             filledBeats: filledBeats,
             totalBeats: totalBeats,
             onDuration: (d) => setState(() => _duration = d),
             onDots: (v) => setState(() => _dots = v),
+            onToggleStack: () => setState(() => _stackMode = !_stackMode),
             onInsert: (keys) => _insertNote(keys: keys),
             onRest: () => _insertNote(keys: const [], rest: true),
             onDelete: _deleteAtCursor,
@@ -539,10 +599,12 @@ class _EditorPanel extends StatelessWidget {
   final EditorCursor cursor;
   final String duration;
   final int dots;
+  final bool stackMode;
   final double filledBeats;
   final int totalBeats;
   final ValueChanged<String> onDuration;
   final ValueChanged<int> onDots;
+  final VoidCallback onToggleStack;
   final ValueChanged<List<String>> onInsert;
   final VoidCallback onRest;
   final VoidCallback onDelete;
@@ -556,10 +618,12 @@ class _EditorPanel extends StatelessWidget {
     required this.cursor,
     required this.duration,
     required this.dots,
+    required this.stackMode,
     required this.filledBeats,
     required this.totalBeats,
     required this.onDuration,
     required this.onDots,
+    required this.onToggleStack,
     required this.onInsert,
     required this.onRest,
     required this.onDelete,
@@ -695,33 +759,55 @@ class _EditorPanel extends StatelessWidget {
   }
 
   Widget _durationRow(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          for (final e in durations.entries)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 3),
-              child: ChoiceChip(
-                label: Text(e.value, style: const TextStyle(fontSize: 22)),
-                labelPadding: const EdgeInsets.symmetric(horizontal: 10),
-                selected: duration == e.key,
-                onSelected: (_) => onDuration(e.key),
-              ),
-            ),
-          // Тумблер пунктира: применяется к следующему вводимому слоту.
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 3),
-            child: ChoiceChip(
-              label: const Text('♩.', style: TextStyle(fontSize: 20)),
-              labelPadding: const EdgeInsets.symmetric(horizontal: 10),
-              tooltip: 'Нота с точкой',
-              selected: dots > 0,
-              onSelected: (_) => onDots(dots > 0 ? 0 : 1),
+    final scheme = Theme.of(context).colorScheme;
+    return Row(
+      children: [
+        // Длительности + пунктир — горизонтальный скролл (могут не влезть).
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (final e in durations.entries)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 3),
+                    child: ChoiceChip(
+                      label: Text(e.value, style: const TextStyle(fontSize: 22)),
+                      labelPadding: const EdgeInsets.symmetric(horizontal: 10),
+                      selected: duration == e.key,
+                      onSelected: (_) => onDuration(e.key),
+                    ),
+                  ),
+                // Тумблер пунктира: применяется к следующему вводимому слоту.
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                  child: ChoiceChip(
+                    label: const Text('♩.', style: TextStyle(fontSize: 20)),
+                    labelPadding: const EdgeInsets.symmetric(horizontal: 10),
+                    tooltip: 'Нота с точкой',
+                    selected: dots > 0,
+                    onSelected: (_) => onDots(dots > 0 ? 0 : 1),
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
-      ),
+        ),
+        const SizedBox(width: 6),
+        // Аккорд-режим: закреплён вне скролла — постоянный индикатор режима
+        // ввода (выкл = быстрый набор; вкл = ноты складываются в созвучие).
+        ChoiceChip(
+          avatar: Icon(Icons.layers,
+              size: 18, color: stackMode ? scheme.onSecondaryContainer : null),
+          label: const Text('Аккорд'),
+          tooltip: stackMode
+              ? 'Аккорд-режим включён: ноты складываются в одно созвучие'
+              : 'Аккорд-режим: складывать ноты в одно созвучие',
+          selected: stackMode,
+          selectedColor: scheme.secondaryContainer,
+          onSelected: (_) => onToggleStack(),
+        ),
+      ],
     );
   }
 

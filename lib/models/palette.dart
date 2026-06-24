@@ -42,6 +42,23 @@ double noteFraction(String duration, int dots) {
   return total;
 }
 
+/// Высотный «ранг» ключа VexFlow — для сортировки голов аккорда снизу вверх
+/// (VexFlow ждёт упорядоченные головки). Понимает букву a–g с диезами/бемолями
+/// и октаву; головку (3-й сегмент, напр. "/x2" у тарелок) игнорирует — у
+/// ударных порядок идёт по линии стана.
+int keyPitchRank(String key) {
+  const semi = {'c': 0, 'd': 2, 'e': 4, 'f': 5, 'g': 7, 'a': 9, 'b': 11};
+  final parts = key.split('/');
+  final la = parts[0].toLowerCase();
+  var s = semi[la.isNotEmpty ? la[0] : 'c'] ?? 0;
+  for (var k = 1; k < la.length; k++) {
+    if (la[k] == '#') s += 1;
+    if (la[k] == 'b') s -= 1;
+  }
+  final octave = parts.length > 1 ? (int.tryParse(parts[1]) ?? 4) : 4;
+  return octave * 12 + s;
+}
+
 /// Ноты для клавишных (натуральные; диез добавляется тумблером в UI).
 const List<String> pianoLetters = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
 
