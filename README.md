@@ -1,112 +1,139 @@
 # ScoreFlow 🎼
 
-Высокопроизводительный кроссплатформенный мобильный нотный редактор и интерактивный плеер партитур с открытым исходным кодом, разработанный на Flutter.
+**English** · [Русский](README.ru.md)
 
-ScoreFlow реализует двусторонний асинхронный мост (Bridge) между нативным мобильным интерфейсом и мощными веб-движками рендеринга нотной графики. Проект заточен под нужды пианистов, клавишников и барабанщиков, позволяя удобно читать, редактировать и выводить на печать сложные многострочные партитуры прямо со смартфона.
+**Mobile-first music notation editor built with Flutter and VexFlow.**
 
-## 🚀 Проблема и решение (В чем отличие от Songsterr?)
+ScoreFlow lets you create, edit, play back, and print sheet music directly on a
+phone — focused on **piano** (grand staff) and **drum** notation. It runs a
+VexFlow rendering engine inside a WebView with a Web Audio playback engine, and
+works **fully offline**: no account, no backend, scores stored as local files.
 
-Популярные сервисы (например, *Songsterr*) создавались с упором на гитарные табулатуры и бесконечную ленту. Они абсолютно не приспособлены для полноценных клавишных партий (две строки, скрипичный + басовый ключ) и барабанных треков. У них нет разбиения на страницы, что делает невозможным нормальный вывод нот на печать — такты обрезаются, а форматирование ломается.
+Unlike guitar-tab-oriented apps, ScoreFlow targets keyboard and percussion
+parts and produces clean, page-based **A4 PDF** output without clipped bars.
 
-**ScoreFlow решает эту проблему для клавишных и ударных за счет адаптивного рендеринга:**
-1. **Режим строки (Line View):** Горизонтальный бесконечный скролл нотного стана, идеальный для разбора быстрых пассажей и барабанных сбивок на экране телефона.
-2. **Режим страницы (Page View):** Полный перерасчет сетки, который собирает многострочные партии клавишных (аккомпанемент + соло) в аккуратные виртуальные листы формата А4.
-3. **Идеальный экспорт в PDF:** Генерация чистой векторной графики, полностью готовой к системной печати без потери качества и наложения нотных знаков.
-
----
-
-## 🛠 Технический стек
-
-- **Frontend Shell:** Flutter (Dart) — отвечает за нативный интерфейс (Material 3), управление темпом (BPM), навигацию и файловую систему.
-- **Render Engine:** Слой рендеринга академических нот (VexFlow / AlphaTab в режиме классического стана), упакованный внутрь автономного offline-модуля через `flutter_inappwebview`.
-- **Архитектура:** Offline-first локальная архитектура. Синхронизация между Flutter и JS-слоем идет через асинхронные каналы `evaluateJavascript`.
-- **Форматы данных:** Парсинг файлов MusicXML (стандарт для клавишных партитур) и оптимизированных кастомных схем JSON.
+> Status: **active development** — see [ROADMAP.md](ROADMAP.md).
 
 ---
 
-## 🗺 План разработки (Roadmap)
+## Features
 
-- [x] Развертывание базового каркаса Flutter с поддержкой Material 3.
-- [x] Реализация высокоскоростного локального WebView-моста через инжекцию Base64 Data.
-- [ ] Интеграция нотного движка (VexFlow/AlphaTab) с фокусом на двухстрочный клавишный стан и барабанную нотацию.
-- [ ] Настройка динамического переключателя режимов отображения (Строка / Страница А4).
-- [ ] Подключение системного менеджера печати Android/iOS для экспорта векторных PDF-файлов.
-- [ ] Кастомный движок переключения тем оформления (включая скрытые конфигурации).
+### Notation
+- Piano notation (treble + bass grand staff)
+- Drum notation (percussion clef, articulations by notehead)
+- Chords / multi-key notes
+- Dotted notes & dotted rests
+- 32nd and 64th notes
+- Ties (duration) and slurs (phrasing)
+- Tuplets — universal `actual:normal` (triplets, quintuplets, sextuplets, septuplets, custom)
+- Key signatures & time signatures (incl. custom meters)
+- Professional beaming (beat groups, compound/irregular meters)
+- Automatic measure completion (canonical rest fill)
+
+### Playback
+- Web Audio engine (look-ahead scheduler)
+- Sampled piano (Salamander Grand) with synth fallback
+- Sampled drum kit with synth fallback
+- Metronome
+- Tempo control (BPM)
+- Follow Playback (auto-scroll to the active system)
+- Note-synced playhead + active-note highlight
+- Sustain (damper) pedal
+
+### Editing
+- Smart insert (fills rests / inserts after cursor)
+- Smart delete (note → rest in place)
+- Undo / Redo (snapshot history)
+- Chord input mode
+- Range selection (for slurs and tuplets)
+- Tap-to-select notes on the score
+
+### Export
+- A4 pagination (system/page layout with justification)
+- PDF export via the system print dialog
+
+### Storage
+- Offline-first local storage (one JSON file per score)
+- Score library (create, open, rename, delete)
 
 ---
 
-## 📦 Инструкция по развертыванию
+## Architecture
 
-### Требования
-Убедитесь, что у вас установлен актуальный Flutter SDK. Целевой Android SDK: API 34+.
-
-### Локальный запуск
-
-1. Клонируйте репозиторий:
-   ```bash
-   git clone https://github.com
-   ```
-2. Перейдите в директорию проекта:
-   ```bash
-   cd scoreflow
-   ```
-3. Загрузите зависимости Dart:
-   ```bash
-   flutter pub get
-   ```
-4. Запустите приложение на подключенном смартфоне (с обходом строгой валидации зависимостей AGP):
-   ```bash
-   flutter run --android-skip-build-dependency-validation
-   ```
-
----
-
-## 🎹 Сэмплы концертного рояля (оффлайн-звук)
-
-Воспроизведение фортепиано использует реальные сэмплы **Salamander Grand Piano**
-(Yamaha C5, CC-BY 3.0) через Web Audio. Бинарные сэмплы не хранятся в репозитории —
-их кладёт одноразовый скрипт (нужна сеть **только при подготовке**; само приложение
-работает полностью оффлайн):
-
-```bash
-node tools/fetch_salamander.mjs
+```
+Flutter (UI, state, files, transport)
+   │  base64 JSON over evaluateJavascript / callHandler
+   ▼
+WebView (flutter_inappwebview)
+   │  assets served by a local HTTP server (offline)
+   ▼
+VexFlow (notation rendering, SVG)
+   +
+Web Audio API (sampled playback + scheduler)
 ```
 
-Скрипт скачивает файлы в `assets/www/piano/` согласно `manifest.json` (~6–8 МБ,
-single-velocity). Для более реалистичной динамики добавьте в манифест зоны с
-`loVel`/`hiVel` и multi-velocity-файлами и перезапустите скрипт.
-
-Без сэмплов приложение не ломается: движок воспроизведения автоматически
-переходит на синтез-fallback.
+- **Localhost server** — `InAppLocalhostServer` serves the engine assets over
+  `http://localhost`, so relative paths (`js/vexflow.js`, samples) resolve.
+- **Offline assets** — the VexFlow engine and audio samples are bundled; the app
+  needs no network at runtime.
+- **JSON transport** — scores are serialized to base64 JSON and passed to the
+  engine; taps and playback events are reported back through a JS bridge.
 
 ---
 
-## 🥁 Сэмплы ударной установки (оффлайн-звук)
+## Development Status
 
-Ударные воспроизводятся реальными сэмплами акустической установки (12 партий:
-бочка, малый, хай-хэт closed/open/pedal, крэш 1/2, райд, райд-белл, 3 тома) с
-velocity-слоями (pp/mf/ff), choke-группой хай-хэта и полным затуханием тарелок.
+**Active development.** Implemented and planned work is tracked in
+[ROADMAP.md](ROADMAP.md), which is the single source of truth for project state.
 
-Одной командой (по аналогии с роялем; нужна сеть только при подготовке):
+---
 
+## Roadmap
+
+Next priorities (details in [ROADMAP.md](ROADMAP.md)):
+
+- Dynamics (pp–ff) and crescendo / diminuendo
+- Copy / paste measures and multi-selection
+- MusicXML import
+- Articulations (staccato, accent, tenuto, …)
+
+---
+
+## Getting Started
+
+### Requirements
+- Flutter SDK (Dart `>=3.12.2`)
+- Android SDK 34+ (or an iOS toolchain)
+
+### Run
 ```bash
-node tools/fetch_drums.mjs
+git clone <repo-url>
+cd scoreflow
+flutter pub get
+# AGP dependency validation is skipped intentionally (see ROADMAP tech debt)
+flutter run --android-skip-build-dependency-validation
 ```
 
-Скрипт скачивает готовые MP3 акустической установки (демо-сэмплы Tone.js, MIT)
-в `assets/www/drums/`: **kick, snare, hi-hat (closed), tom×3, crash×2** — без
-ffmpeg, без архивов, без ручного поиска. Это single-velocity сэмплы (как наш
-Salamander-набор для рояля); динамика по velocity делается громкостью/яркостью
-в движке.
+### Tests
+```bash
+flutter analyze
+flutter test
+```
 
-Открытый/педальный хай-хэт, ride и ride bell в наборе не заданы и звучат через
-**синтез-fallback** — приложение не ломается. Итоговый размер набора — **< 2 МБ**.
-Хотите свой набор? Зеркальте файлы с теми же именами и укажите
-`node tools/fetch_drums.mjs --base=https://ваш-хост/`. Сами `*.mp3` в
-репозитории не хранятся.
+### Audio samples (optional)
+Piano and drum samples are included in the repository, so playback works out of
+the box. To (re)generate or replace them, run the one-shot fetch scripts
+(network required **only** when preparing assets):
+
+```bash
+node tools/fetch_salamander.mjs   # piano  -> assets/www/piano/
+node tools/fetch_drums.mjs        # drums  -> assets/www/drums/
+```
+
+If samples are missing, the engine automatically falls back to synthesis.
 
 ---
 
-## 📄 Лицензия
+## License
 
-Этот проект распространяется под свободной лицензией MIT — подробности см. в файле [LICENSE](LICENSE).
+Released under the [MIT License](LICENSE).
