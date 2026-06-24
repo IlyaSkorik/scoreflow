@@ -115,6 +115,12 @@ class Measure {
 
   List<MusicNote> voice(String id) => voices.putIfAbsent(id, () => []);
 
+  /// Глубокая копия такта (каждая нота копируется, флаг auto сохраняется).
+  Measure copy() => Measure({
+        for (final entry in voices.entries)
+          entry.key: entry.value.map((n) => n.copy()).toList(),
+      });
+
   Map<String, dynamic> toJson() => {
         for (final entry in voices.entries)
           entry.key: entry.value.map((n) => n.toJson()).toList(),
@@ -170,6 +176,25 @@ class Score {
         createdAt: now,
         updatedAt: now,
         measures: [Measure.empty(instrument)],
+      );
+
+  /// Глубокая копия партитуры — основа snapshot-истории Undo/Redo.
+  ///
+  /// Копируются такты/ноты вместе со служебным флагом [MusicNote.auto], поэтому
+  /// восстановленное состояние не требует повторной нормализации (в отличие от
+  /// round-trip через JSON, который флаг auto теряет). Идентичность партитуры
+  /// (id/createdAt) сохраняется — это та же партитура в другой момент времени.
+  Score copy() => Score(
+        id: id,
+        title: title,
+        instrument: instrument,
+        composer: composer,
+        keySignature: keySignature,
+        timeSignature: TimeSignature(timeSignature.beats, timeSignature.beatValue),
+        tempo: tempo,
+        measures: measures.map((m) => m.copy()).toList(),
+        createdAt: createdAt,
+        updatedAt: updatedAt,
       );
 
   Map<String, dynamic> toJson() => {

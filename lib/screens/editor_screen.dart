@@ -5,6 +5,7 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../data/score_repository.dart';
 import '../main.dart' show kEngineUrl;
+import '../models/history.dart';
 import '../models/palette.dart';
 import '../models/reflow.dart';
 import '../models/score.dart';
@@ -39,6 +40,7 @@ class _EditorScreenState extends State<EditorScreen> {
 
   Score? _score;
   final EditorCursor _cursor = EditorCursor();
+  final ScoreHistory _history = ScoreHistory();
   String _duration = 'q';
   int _dots = 0; // 0 = без точки, 1 = пунктир (модель расширяема до 2–3)
   bool _stackMode = false; // Аккорд-режим: ввод наращивает созвучие, не двигая курсор
@@ -113,9 +115,53 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   void _commit(VoidCallback mutation) {
+    // Снимок состояния ДО правки (глубокая копия + курсор) для Undo.
+    final before = _takeSnapshot();
+    final beforeJson = before.score.encode();
     setState(() {
       mutation();
       _normalize(); // соблюдение размера такта после любого изменения
+    });
+    // В историю — только при РЕАЛЬНОМ изменении документа. Навигация ◀▶ и
+    // смена голоса меняют лишь курсор (encode совпадает) и в Undo не идут —
+    // как в MuseScore/Dorico, где Undo откатывает партитуру, а не выбор.
+    if (_score!.encode() != beforeJson) {
+      _history.record(before);
+    }
+    _render();
+    _persist();
+  }
+
+  /// Снимок текущего состояния редактора (партитура + курсор) для истории.
+  EditorSnapshot _takeSnapshot() => EditorSnapshot(
+        score: _score!.copy(),
+        measure: _cursor.measure,
+        voice: _cursor.voice,
+        index: _cursor.index,
+      );
+
+  /// Откат / повтор. Восстанавливают партитуру и курсор как есть, без
+  /// повторной нормализации — снимок уже валиден (флаг auto сохранён в копии).
+  /// Рендер VexFlow, индикатор заполнения, пиано/драм-панель и доступность
+  /// кнопок ↶/↷ обновляются через setState. Режим аккорда/перо (настройки
+  /// инструмента) сознательно не трогаем — они не часть документа.
+  void _undo() {
+    final restored = _history.undo(_takeSnapshot());
+    if (restored != null) _applySnapshot(restored);
+  }
+
+  void _redo() {
+    final restored = _history.redo(_takeSnapshot());
+    if (restored != null) _applySnapshot(restored);
+  }
+
+  void _applySnapshot(EditorSnapshot snap) {
+    setState(() {
+      _score = snap.score;
+      _cursor
+        ..measure = snap.measure
+        ..voice = snap.voice
+        ..index = snap.index;
     });
     _render();
     _persist();
@@ -701,9 +747,13 @@ class _EditorScreenState extends State<EditorScreen> {
         isPlaying: _isPlaying,
         metronomeOn: _metronome,
         followOn: _follow,
+        canUndo: _history.canUndo,
+        canRedo: _history.canRedo,
         onTogglePlay: _togglePlay,
         onToggleMetronome: _toggleMetronome,
         onToggleFollow: _toggleFollow,
+        onUndo: _undo,
+        onRedo: _redo,
         onTempoTap: _showMoreSheet,
         onOpenMore: _showMoreSheet,
       ),
@@ -1126,17 +1176,22 @@ class _DrumPad extends StatelessWidget {
 // =====================================================================
 //  Нижняя панель плеера
 // =====================================================================
-// Слим-транспорт (Зона 4): play/pause + метроном + follow + темп-чип (тап →
-// лист «Ещё» с точным темпом) + ⋯ (лист «Ещё» с редкими действиями). Слайдер
-// темпа и нишевые тумблеры из постоянной строки убраны — они в листе «Ещё».
+// Слим-транспорт (Зона 4): play/pause + Undo/Redo + метроном + follow +
+// темп-чип (тап → лист «Ещё» с точным темпом) + ⋯ (лист «Ещё» с редкими
+// действиями). Undo/Redo рядом с play — высокочастотные действия в зоне
+// большого пальца; гаснут (disabled), когда стек пуст.
 class _PlaybackBar extends StatelessWidget {
   final int tempo;
   final bool isPlaying;
   final bool metronomeOn;
   final bool followOn;
+  final bool canUndo;
+  final bool canRedo;
   final VoidCallback onTogglePlay;
   final VoidCallback onToggleMetronome;
   final VoidCallback onToggleFollow;
+  final VoidCallback onUndo;
+  final VoidCallback onRedo;
   final VoidCallback onTempoTap;
   final VoidCallback onOpenMore;
 
@@ -1145,9 +1200,13 @@ class _PlaybackBar extends StatelessWidget {
     required this.isPlaying,
     required this.metronomeOn,
     required this.followOn,
+    required this.canUndo,
+    required this.canRedo,
     required this.onTogglePlay,
     required this.onToggleMetronome,
     required this.onToggleFollow,
+    required this.onUndo,
+    required this.onRedo,
     required this.onTempoTap,
     required this.onOpenMore,
   });
@@ -1157,7 +1216,7 @@ class _PlaybackBar extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return BottomAppBar(
       height: 60,
-      padding: const EdgeInsets.symmetric(horizontal: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 4),
       child: Row(
         children: [
           FloatingActionButton.small(
@@ -1166,8 +1225,21 @@ class _PlaybackBar extends StatelessWidget {
             child: Icon(isPlaying ? Icons.pause : Icons.play_arrow),
           ),
           IconButton(
+            tooltip: 'Отменить',
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.undo),
+            onPressed: canUndo ? onUndo : null,
+          ),
+          IconButton(
+            tooltip: 'Вернуть',
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.redo),
+            onPressed: canRedo ? onRedo : null,
+          ),
+          IconButton(
             tooltip: 'Метроном',
             isSelected: metronomeOn,
+            visualDensity: VisualDensity.compact,
             icon: const Icon(Icons.av_timer),
             color: metronomeOn ? scheme.primary : null,
             onPressed: onToggleMetronome,
@@ -1177,14 +1249,16 @@ class _PlaybackBar extends StatelessWidget {
                 ? 'Следовать за воспроизведением: вкл.'
                 : 'Следовать за воспроизведением: выкл.',
             isSelected: followOn,
+            visualDensity: VisualDensity.compact,
             icon: Icon(followOn ? Icons.swap_vert : Icons.swap_vert_outlined),
             color: followOn ? scheme.primary : null,
             onPressed: onToggleFollow,
           ),
           const Spacer(),
           // Темп — компактный чип-читалка; тап открывает лист «Ещё» (слайдер).
+          // Без иконки-аватара: символ ♩ сам обозначает темп, экономит ширину.
           ActionChip(
-            avatar: const Icon(Icons.speed, size: 18),
+            visualDensity: VisualDensity.compact,
             label: Text('♩=$tempo'),
             onPressed: onTempoTap,
           ),
