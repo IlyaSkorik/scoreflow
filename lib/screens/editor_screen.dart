@@ -44,9 +44,9 @@ class _EditorScreenState extends State<EditorScreen> {
   String _duration = 'q';
   int _dots = 0; // 0 = без точки, 1 = пунктир (модель расширяема до 2–3)
   bool _stackMode = false; // Аккорд-режим: ввод наращивает созвучие, не двигая курсор
-  // Якорь набора лиги фразировки (slur): первый конец выделения. null — не
-  // активен. Не часть документа — живёт только в сессии редактирования.
-  EditorCursor? _slurAnchor;
+  // Якорь выделения диапазона (общий для slur и tuplet): первый конец. null —
+  // не активен. Не часть документа — живёт только в сессии редактирования.
+  EditorCursor? _selAnchor;
   bool _isPlaying = false;
   bool _metronome = false;
   bool _sustain = false;
@@ -94,8 +94,8 @@ class _EditorScreenState extends State<EditorScreen> {
 
   // Заполненность реальным материалом — авто-паузы добивки не учитываем,
   // иначе индикатор всегда показывал бы «полный такт».
-  double _filled(List<MusicNote> notes) => notes.fold(
-      0.0, (s, n) => s + (n.auto ? 0 : noteFraction(n.duration, n.dots)));
+  double _filled(List<MusicNote> notes) =>
+      notes.fold(0.0, (s, n) => s + (n.auto ? 0 : noteTime(n)));
 
   // --- мост к движку ---------------------------------------------------
   void _render() {
@@ -107,13 +107,13 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
-  /// Диапазон выделения для подсветки набора slur: [_slurAnchor]..курсор в
+  /// Диапазон выделения для подсветки набора slur: [_selAnchor]..курсор в
   /// одном голосе. null, если якоря нет / курсор в другом голосе / на пустом
   /// слоте. Концы упорядочены по (такт, индекс).
   static int _rank(int measure, int index) => measure * 100000 + index;
 
   Map<String, dynamic>? _selectionMap() {
-    final a = _slurAnchor;
+    final a = _selAnchor;
     if (a == null || a.voice != _cursor.voice || _cursor.index < 0) return null;
     final aR = _rank(a.measure, a.index);
     final cR = _rank(_cursor.measure, _cursor.index);
@@ -182,7 +182,7 @@ class _EditorScreenState extends State<EditorScreen> {
   void _applySnapshot(EditorSnapshot snap) {
     setState(() {
       _score = snap.score;
-      _slurAnchor = null; // позиции могли сместиться — якорь набора slur сбрасываем
+      _selAnchor = null; // позиции могли сместиться — якорь набора slur сбрасываем
       _cursor
         ..measure = snap.measure
         ..voice = snap.voice
@@ -243,8 +243,7 @@ class _EditorScreenState extends State<EditorScreen> {
       for (final v in s.instrument.voiceIds) {
         final notes = m.voice(v);
         if (notes.isEmpty) continue;
-        final filled = notes.fold(
-            0.0, (sum, n) => sum + noteFraction(n.duration, n.dots));
+        final filled = notes.fold(0.0, (sum, n) => sum + noteTime(n));
         final remainder = cap - filled;
         if (remainder > 1e-6) {
           notes.addAll(fillRests(filled, remainder, beats, beatValue));
@@ -441,22 +440,18 @@ class _EditorScreenState extends State<EditorScreen> {
     _commit(() => note.tieToNext = !note.tieToNext);
   }
 
-  /// Slur (лига фразировки) — авто по выделению. Первый вызов ставит якорь на
-  /// ноте под курсором; второй (курсор в том же голосе на другой ноте) —
-  /// навешивает дугу на диапазон [якорь..курсор]. Повтор на той же ноте или
-  /// смена голоса — сброс якоря.
-  void _toggleSlur() {
-    if (!_cursorOnNote) return;
-    final a = _slurAnchor;
+  /// Общий механизм выделения диапазона для slur и tuplet. Если якорь активен
+  /// (тот же голос, другая нота) — возвращает упорядоченный диапазон и сбрасывает
+  /// якорь; иначе ставит/снимает якорь на текущей ноте и возвращает null.
+  ({String voice, int m0, int i0, int m1, int i1})? _consumeSelection() {
+    final a = _selAnchor;
     final sameNote = a != null &&
         a.voice == _cursor.voice &&
         a.measure == _cursor.measure &&
         a.index == _cursor.index;
-
     if (a == null || a.voice != _cursor.voice || sameNote) {
-      // поставить/переставить якорь, либо снять его повторным тапом на нём
       setState(() {
-        _slurAnchor = sameNote
+        _selAnchor = sameNote
             ? null
             : EditorCursor(
                 measure: _cursor.measure,
@@ -464,15 +459,28 @@ class _EditorScreenState extends State<EditorScreen> {
                 index: _cursor.index);
       });
       _render();
-      return;
+      return null;
     }
-
     final aR = _rank(a.measure, a.index);
     final cR = _rank(_cursor.measure, _cursor.index);
     final lo = aR <= cR ? a : _cursor;
     final hi = aR <= cR ? _cursor : a;
-    _applySlur(a.voice, lo.measure, lo.index, hi.measure, hi.index);
-    setState(() => _slurAnchor = null);
+    setState(() => _selAnchor = null);
+    return (
+      voice: a.voice,
+      m0: lo.measure,
+      i0: lo.index,
+      m1: hi.measure,
+      i1: hi.index
+    );
+  }
+
+  /// Slur (лига фразировки) — авто по выделению. Первый вызов ставит якорь;
+  /// второй (другая нота того же голоса) навешивает дугу на диапазон.
+  void _toggleSlur() {
+    if (!_cursorOnNote) return;
+    final r = _consumeSelection();
+    if (r != null) _applySlur(r.voice, r.m0, r.i0, r.m1, r.i1);
   }
 
   /// Навесить фразировочную дугу на диапазон одного голоса: slurStart на первой
@@ -493,6 +501,109 @@ class _EditorScreenState extends State<EditorScreen> {
         }
       }
     });
+  }
+
+  /// Tuplet (нестандартная ритмика) — операция над выделением, НЕ режим ввода.
+  /// Курсор уже в группе → снять tuplet со всей группы. Иначе: первый вызов
+  /// ставит якорь; со вторым (диапазон) спрашиваем соотношение и применяем.
+  Future<void> _onTuplet() async {
+    if (_cursorOnNote && _activeVoice[_cursor.index].tuplet != null) {
+      _clearTupletAtCursor();
+      return;
+    }
+    if (!_cursorOnNote) return;
+    final r = _consumeSelection();
+    if (r == null) return; // только что поставили якорь — ждём второй конец
+    final ratio = await _pickTupletRatio();
+    if (ratio == null) return;
+    _applyTuplet(r.voice, r.m0, r.i0, r.m1, r.i1, ratio.$1, ratio.$2);
+  }
+
+  /// Проставить соотношение [actual]:[normal] на нотах диапазона; tupletStart —
+  /// на первой. Группа атомарна при reflow (см. packVoice/tupletChunks).
+  void _applyTuplet(
+      String voice, int m0, int i0, int m1, int i1, int actual, int normal) {
+    _commit(() {
+      final lo = _rank(m0, i0);
+      final hi = _rank(m1, i1);
+      var first = true;
+      for (var m = m0; m <= m1; m++) {
+        final notes = _voiceOf(_score!, m, voice);
+        for (var ix = 0; ix < notes.length; ix++) {
+          final r = _rank(m, ix);
+          if (r < lo || r > hi) continue;
+          notes[ix]
+            ..tuplet = Tuplet(actual, normal)
+            ..tupletStart = first;
+          first = false;
+        }
+      }
+    });
+  }
+
+  /// Снять tuplet со всей группы, содержащей ноту под курсором (группа атомарна
+  /// и лежит в одном такте — ищем её границы в текущем голосе).
+  void _clearTupletAtCursor() {
+    final notes = _activeVoice;
+    final i = _cursor.index;
+    if (i < 0 || i >= notes.length || notes[i].tuplet == null) return;
+    final ref = notes[i].tuplet!;
+    bool same(MusicNote n) =>
+        n.tuplet != null &&
+        n.tuplet!.actualNotes == ref.actualNotes &&
+        n.tuplet!.normalNotes == ref.normalNotes;
+    var s = i;
+    while (s > 0 && !notes[s].tupletStart && same(notes[s - 1])) {
+      s--;
+    }
+    var e = i;
+    while (e + 1 < notes.length && !notes[e + 1].tupletStart && same(notes[e + 1])) {
+      e++;
+    }
+    _commit(() {
+      for (var k = s; k <= e; k++) {
+        notes[k]
+          ..tuplet = null
+          ..tupletStart = false;
+      }
+    });
+  }
+
+  /// Мини-лист выбора соотношения tuplet. Возвращает (actual, normal) или null.
+  Future<(int, int)?> _pickTupletRatio() async {
+    const presets = <(String, int, int)>[
+      ('Триоль', 3, 2),
+      ('Квинтоль', 5, 4),
+      ('Секстоль', 6, 4),
+      ('Септоль', 7, 4),
+      ('Дуоль', 2, 3),
+    ];
+    return showModalBottomSheet<(int, int)>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text('Tuplet (нестандартная ритмика)',
+                  style: Theme.of(ctx).textTheme.titleMedium),
+            ),
+            for (final p in presets)
+              ListTile(
+                dense: true,
+                leading: Text('${p.$2}:${p.$3}',
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 16)),
+                title: Text(p.$1),
+                onTap: () => Navigator.pop(ctx, (p.$2, p.$3)),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _moveNote(int delta) {
@@ -863,7 +974,9 @@ class _EditorScreenState extends State<EditorScreen> {
             dots: _dots,
             stackMode: _stackMode,
             tieOnCursor: _cursorOnNote && _activeVoice[_cursor.index].tieToNext,
-            slurArmed: _slurAnchor != null,
+            selArmed: _selAnchor != null,
+            tupletOnCursor:
+                _cursorOnNote && _activeVoice[_cursor.index].tuplet != null,
             canLiga: _cursorOnNote,
             filledBeats: filledBeats,
             totalBeats: totalBeats,
@@ -872,6 +985,7 @@ class _EditorScreenState extends State<EditorScreen> {
             onToggleStack: () => setState(() => _stackMode = !_stackMode),
             onToggleTie: _toggleTie,
             onToggleSlur: _toggleSlur,
+            onTuplet: _onTuplet,
             onInsert: (keys) => _insertNote(keys: keys),
             onRest: () => _insertNote(keys: const [], rest: true),
             onDelete: _deleteAtCursor,
@@ -909,8 +1023,9 @@ class _EditorPanel extends StatelessWidget {
   final int dots;
   final bool stackMode;
   final bool tieOnCursor; // у ноты под курсором стоит лига длительности
-  final bool slurArmed; // активен набор лиги фразировки (якорь поставлен)
-  final bool canLiga; // курсор на реальной ноте — лиги применимы
+  final bool selArmed; // активно выделение диапазона (якорь для slur/tuplet)
+  final bool tupletOnCursor; // нота под курсором входит в tuplet-группу
+  final bool canLiga; // курсор на реальной ноте — лиги/tuplet применимы
   final double filledBeats;
   final int totalBeats;
   final ValueChanged<String> onDuration;
@@ -918,6 +1033,7 @@ class _EditorPanel extends StatelessWidget {
   final VoidCallback onToggleStack;
   final VoidCallback onToggleTie;
   final VoidCallback onToggleSlur;
+  final VoidCallback onTuplet;
   final ValueChanged<List<String>> onInsert;
   final VoidCallback onRest;
   final VoidCallback onDelete;
@@ -931,7 +1047,8 @@ class _EditorPanel extends StatelessWidget {
     required this.dots,
     required this.stackMode,
     required this.tieOnCursor,
-    required this.slurArmed,
+    required this.selArmed,
+    required this.tupletOnCursor,
     required this.canLiga,
     required this.filledBeats,
     required this.totalBeats,
@@ -940,6 +1057,7 @@ class _EditorPanel extends StatelessWidget {
     required this.onToggleStack,
     required this.onToggleTie,
     required this.onToggleSlur,
+    required this.onTuplet,
     required this.onInsert,
     required this.onRest,
     required this.onDelete,
@@ -1135,19 +1253,39 @@ class _EditorPanel extends StatelessWidget {
           ),
           // Slur — лига ФРАЗИРОВКИ (авто по выделению: якорь -> курсор).
           IconButton(
-            tooltip: slurArmed
+            tooltip: selArmed
                 ? 'Лига фразировки: выберите второй конец'
                 : 'Лига фразировки (Slur)',
-            isSelected: slurArmed,
+            isSelected: selArmed,
             visualDensity: VisualDensity.compact,
             padding: EdgeInsets.zero,
             constraints: tight,
             icon: const Icon(Icons.gesture),
             style: IconButton.styleFrom(
-              backgroundColor: slurArmed ? scheme.tertiaryContainer : null,
-              foregroundColor: slurArmed ? scheme.onTertiaryContainer : null,
+              backgroundColor: selArmed ? scheme.tertiaryContainer : null,
+              foregroundColor: selArmed ? scheme.onTertiaryContainer : null,
             ),
             onPressed: canLiga ? onToggleSlur : null,
+          ),
+          // Tuplet — нестандартная ритмика (операция над выделением). В группе
+          // — снимает её; иначе: якорь -> выбор соотношения 3:2/5:4/…
+          IconButton(
+            tooltip: tupletOnCursor
+                ? 'Убрать tuplet'
+                : (selArmed
+                    ? 'Tuplet: выберите второй конец'
+                    : 'Tuplet (триоль/квинтоль/…)'),
+            isSelected: tupletOnCursor,
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: tight,
+            icon: const Icon(Icons.data_array),
+            style: IconButton.styleFrom(
+              backgroundColor: tupletOnCursor ? scheme.secondaryContainer : null,
+              foregroundColor:
+                  tupletOnCursor ? scheme.onSecondaryContainer : null,
+            ),
+            onPressed: (canLiga || tupletOnCursor) ? onTuplet : null,
           ),
           IconButton.filledTonal(
             tooltip: 'Пауза',

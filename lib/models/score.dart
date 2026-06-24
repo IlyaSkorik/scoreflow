@@ -53,6 +53,25 @@ class TimeSignature {
       TimeSignature(j['beats'] as int? ?? 4, j['beatValue'] as int? ?? 4);
 }
 
+/// Соотношение группы нестандартной ритмики (tuplet): [actualNotes] нот за
+/// время [normalNotes]. Триоль = 3:2, квинтоль = 5:4 и т.д. Универсально —
+/// отдельного типа «триоль» нет. [scale] — множитель РЕАЛЬНОГО времени ноты
+/// группы (normal/actual): в 3:2 каждая нота длится 2/3 написанной.
+class Tuplet {
+  final int actualNotes;
+  final int normalNotes;
+
+  const Tuplet(this.actualNotes, this.normalNotes);
+
+  double get scale => normalNotes / actualNotes;
+
+  Map<String, dynamic> toJson() =>
+      {'actual': actualNotes, 'normal': normalNotes};
+
+  factory Tuplet.fromJson(Map<String, dynamic> j) =>
+      Tuplet(j['actual'] as int? ?? 3, j['normal'] as int? ?? 2);
+}
+
 /// Одна нота / аккорд / пауза.
 ///
 /// [keys] — ключи в формате VexFlow: "c/4", аккорд ["c/4","e/4"], а для
@@ -77,6 +96,10 @@ class TimeSignature {
 ///          нот любой высоты. Маркеры на нотах-концах; промежуточные ноты
 ///          попадают под дугу. НЕ объединяет ни длительности, ни звуки
 ///          (на playback не влияет — только рендер/модель/PDF).
+/// [tuplet]/[tupletStart] — Tuplet (нестандартная ритмика): нота входит в
+///          группу с соотношением [tuplet]; [tupletStart] помечает ПЕРВУЮ ноту
+///          группы (разделяет смежные группы одного соотношения). Влияет на
+///          реальное время (см. [tupletScale]) — рендер/playback/PDF/reflow.
 class MusicNote {
   List<String> keys;
   String duration;
@@ -86,6 +109,8 @@ class MusicNote {
   bool tieToNext;
   bool slurStart;
   bool slurStop;
+  Tuplet? tuplet;
+  bool tupletStart;
 
   MusicNote({
     required this.keys,
@@ -96,7 +121,12 @@ class MusicNote {
     this.tieToNext = false,
     this.slurStart = false,
     this.slurStop = false,
+    this.tuplet,
+    this.tupletStart = false,
   });
+
+  /// Множитель реального времени ноты от tuplet-группы (1.0 вне группы).
+  double get tupletScale => tuplet?.scale ?? 1.0;
 
   MusicNote copy() => MusicNote(
         keys: List.of(keys),
@@ -107,6 +137,10 @@ class MusicNote {
         tieToNext: tieToNext,
         slurStart: slurStart,
         slurStop: slurStop,
+        tuplet: tuplet == null
+            ? null
+            : Tuplet(tuplet!.actualNotes, tuplet!.normalNotes),
+        tupletStart: tupletStart,
       );
 
   Map<String, dynamic> toJson() => {
@@ -118,6 +152,8 @@ class MusicNote {
         if (tieToNext) 'tieToNext': true,
         if (slurStart) 'slurStart': true,
         if (slurStop) 'slurStop': true,
+        if (tuplet != null) 'tuplet': tuplet!.toJson(),
+        if (tupletStart) 'tupletStart': true,
       };
 
   factory MusicNote.fromJson(Map<String, dynamic> j) => MusicNote(
@@ -128,6 +164,10 @@ class MusicNote {
         tieToNext: j['tieToNext'] as bool? ?? false,
         slurStart: j['slurStart'] as bool? ?? false,
         slurStop: j['slurStop'] as bool? ?? false,
+        tuplet: j['tuplet'] == null
+            ? null
+            : Tuplet.fromJson(j['tuplet'] as Map<String, dynamic>),
+        tupletStart: j['tupletStart'] as bool? ?? false,
       );
 }
 

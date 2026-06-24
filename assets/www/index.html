@@ -442,9 +442,43 @@
             return [new VF.Fraction(1, beatValue)];
         }
 
+        // Группирует подряд идущие ноты голоса в VF.Tuplet по их флагам
+        // (__note.tuplet + tupletStart) — как tupletChunks в reflow.dart.
+        // Конструктор Tuplet применяет множитель тиков, поэтому вызывать ДО
+        // форматирования. Возвращает массив для отрисовки ПОСЛЕ нот/балок.
+        function buildTuplets(VF, voice) {
+            const tk = voice.getTickables();
+            const out = [];
+            let i = 0;
+            while (i < tk.length) {
+                const n = tk[i].__note;
+                if (!n || !n.tuplet) { i++; continue; }
+                const a = n.tuplet.actual, nm = n.tuplet.normal;
+                const group = [tk[i]];
+                let j = i + 1;
+                while (j < tk.length) {
+                    const m = tk[j].__note;
+                    if (!m || !m.tuplet || m.tupletStart ||
+                        m.tuplet.actual !== a || m.tuplet.normal !== nm) break;
+                    group.push(tk[j]);
+                    j++;
+                }
+                try {
+                    out.push(new VF.Tuplet(group, {
+                        num_notes: a, notes_occupied: nm, ratioed: false,
+                    }));
+                } catch (e) { console.error('tuplet build failed:', e); }
+                i = j;
+            }
+            return out;
+        }
+
         function formatAndDraw(VF, ctx, voices, staves, measureW, rowStart, isFirst, beats, beatValue) {
             const fmt = new VF.Formatter();
             voices.forEach((v) => fmt.joinVoices([v]));
+            // Tuplets создаём ДО форматирования (применяют множитель тиков).
+            const tuplets = [];
+            voices.forEach((v) => buildTuplets(VF, v).forEach((t) => tuplets.push(t)));
             // Ширину нотной зоны берём из РЕАЛЬНОЙ геометрии стана (после ключа/
             // размера/тональности). Старт нот выравниваем по всем станам системы.
             let startX = 0;
@@ -505,6 +539,13 @@
                             : { tx: 0, sx: 1 };
                     }
                 });
+            });
+
+            // Числа/скобки tuplet — после нот и балок, в ТОМ ЖЕ контексте сжатия
+            // (внутри grp при sx<1), чтобы совпадать со сжатыми нотами.
+            tuplets.forEach((t) => {
+                try { t.setContext(ctx).draw(); }
+                catch (e) { console.error('tuplet draw failed:', e); }
             });
 
             if (grp) {
@@ -760,6 +801,13 @@
             return total;
         }
 
+        // Множитель реального времени ноты от tuplet-группы (normal/actual).
+        // 1.0 вне группы. Триоль 3:2 -> 2/3.
+        function tupletScaleOf(n) {
+            return (n && n.tuplet && n.tuplet.actual)
+                ? n.tuplet.normal / n.tuplet.actual : 1;
+        }
+
         // VexFlow-ключ "c#/4" -> частота (Гц); для ударных не используется
         const SEMI = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
         function keyToFreq(key) {
@@ -877,7 +925,8 @@
                     let acc = 0;
                     for (let ni = 0; ni < notes.length; ni++) {
                         const n = notes[ni];
-                        const q = durationBeats(n.duration, n.dots);
+                        // Реальное время с учётом tuplet (нестандартная ритмика).
+                        const q = durationBeats(n.duration, n.dots) * tupletScaleOf(n);
                         events.push({
                             noteId: mi + ':' + v + ':' + ni,
                             startBeat: base + acc,
@@ -1785,6 +1834,11 @@
                 // Один форматтер на такт — ноты разных станов выравниваются по тактам.
                 const f = new VF.Formatter();
                 voices.forEach(function (v) { f.joinVoices([v]); });
+                // Tuplets — ДО форматирования (применяют множитель тиков).
+                const tuplets = [];
+                voices.forEach(function (v) {
+                    buildTuplets(VF, v).forEach(function (t) { tuplets.push(t); });
+                });
                 f.format(voices, contentW);
 
                 staves.forEach(function (s) { s.draw(); });
@@ -1807,6 +1861,11 @@
                                 { sn: t, ctx: ctx, sys: sysIndex };
                         });
                     }
+                });
+                // Числа/скобки tuplet — после нот и балок.
+                tuplets.forEach(function (t) {
+                    try { t.setContext(ctx).draw(); }
+                    catch (e) { console.error('tuplet draw failed:', e); }
                 });
 
                 // Системная скобка + левая линия (клавишные).

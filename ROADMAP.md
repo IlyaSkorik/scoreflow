@@ -47,6 +47,7 @@ print-grade output (clean A4 PDF, no clipped bars). Primary focus: keyboard
 - [x] Multi-key notes (chords, drum stacks)
 - [x] **Tie** (duration ligature — model, rendering, **playback merge**, PDF)
 - [x] **Slur** (phrasing ligature — model, rendering, PDF) — _playback unaffected by design (stage 1)_
+- [x] **Tuplets** (universal `actual:normal` — triplets, quintuplets, sextuplets, septuplets, custom; model, rendering, playback timing, reflow-atomic, PDF)
 - [x] Auto measure completion (reflow + canonical rest fill)
 - [x] Professional beaming (beat-group beams, compound/irregular meters)
 - [x] Partial ligature arcs across row/system breaks
@@ -82,7 +83,6 @@ _Nothing in active development right now._
 ## Next Priorities
 
 ### High Priority
-- [ ] Tuplets (triplets, quintuplets, etc.)
 - [ ] Copy / Paste measures
 - [ ] Multi-selection
 - [ ] Dynamics (pp, p, mp, mf, f, ff)

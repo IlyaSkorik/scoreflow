@@ -1,11 +1,54 @@
 import 'palette.dart';
 import 'score.dart';
 
-/// Раскладывает поток нот одного голоса по тактам так, чтобы сумма
+/// РЕАЛЬНОЕ время ноты (доля от целой) с учётом точек И tuplet-соотношения.
+/// Базовая длительность масштабируется на [MusicNote.tupletScale]
+/// (normal/actual): нота триоли 3:2 занимает 2/3 написанной длительности.
+double noteTime(MusicNote n) =>
+    noteFraction(n.duration, n.dots) * n.tupletScale;
+
+/// Разбивает поток нот одного голоса на «чанки» — неделимые при раскладке
+/// единицы: одиночная нота вне tuplet, либо ЦЕЛАЯ tuplet-группа. Группа —
+/// непрерывный ряд нот с одинаковым соотношением, начинающийся с [tupletStart].
+/// Так tuplet никогда не дробится через границу такта.
+List<List<MusicNote>> tupletChunks(List<MusicNote> notes) {
+  final chunks = <List<MusicNote>>[];
+  var i = 0;
+  while (i < notes.length) {
+    final n = notes[i];
+    if (n.tuplet == null) {
+      chunks.add([n]);
+      i++;
+      continue;
+    }
+    // Старт группы: текущая нота. Включаем последующие ноты того же
+    // соотношения, пока не встретим новый tupletStart / смену / выход из tuplet.
+    final group = <MusicNote>[n];
+    final t = n.tuplet!;
+    var j = i + 1;
+    while (j < notes.length) {
+      final m = notes[j];
+      if (m.tuplet == null ||
+          m.tupletStart ||
+          m.tuplet!.actualNotes != t.actualNotes ||
+          m.tuplet!.normalNotes != t.normalNotes) {
+        break;
+      }
+      group.add(m);
+      j++;
+    }
+    chunks.add(group);
+    i = j;
+  }
+  return chunks;
+}
+
+/// Раскладывает поток нот одного голоса по тактам так, чтобы сумма РЕАЛЬНЫХ
 /// длительностей в каждом такте не превышала [capacity] (доля от целой ноты).
 ///
-/// Ноты не расщепляются: если очередная нота не влезает в текущий такт, она
-/// целиком переносится в следующий. Нота, чья длительность сама по себе больше
+/// Единица переноса — «чанк» (см. [tupletChunks]): одиночная нота или целая
+/// tuplet-группа. Чанк не расщепляется: если не влезает в текущий такт —
+/// целиком переносится в следующий. Чанк, чья длительность сама по себе больше
 /// размера такта (редкий край), занимает отдельный такт. Всегда возвращает
 /// минимум одну (возможно пустую) корзину.
 List<List<MusicNote>> packVoice(List<MusicNote> notes, double capacity) {
@@ -13,14 +56,14 @@ List<List<MusicNote>> packVoice(List<MusicNote> notes, double capacity) {
   var current = <MusicNote>[];
   var sum = 0.0;
 
-  for (final n in notes) {
-    final f = noteFraction(n.duration, n.dots);
+  for (final chunk in tupletChunks(notes)) {
+    final f = chunk.fold<double>(0, (s, n) => s + noteTime(n));
     if (current.isNotEmpty && sum + f > capacity + 1e-6) {
       bins.add(current);
       current = <MusicNote>[];
       sum = 0;
     }
-    current.add(n);
+    current.addAll(chunk);
     sum += f;
   }
   if (current.isNotEmpty || bins.isEmpty) bins.add(current);
