@@ -206,72 +206,146 @@
             const measures = score.measures || [];
             const cursor = score.cursor || { measure: -1, voice: '', index: -1 };
 
-            // --- раскладка: несколько тактов в строку, перенос по ширине ----
+            // --- раскладка: голова (ключ/размер) измеряется реально, а гибкая
+            // нотная зона строки раздаётся ПРОПОРЦИОНАЛЬНО содержимому (cm).
+            // Плотные такты получают заметно больше ширины (естественный вид),
+            // разреженные — меньше. Сжатие нот (scaleX в formatAndDraw) остаётся
+            // лишь как страховка для строки, чьё суммарное содержимое физически
+            // не влезает; тогда оно равномерно по всем тактам строки.
             const margin = 8;
             const usableW = width - 2 * margin;
-            const minMeasureW = isDrums ? 180 : 220;
-            let perRow = Math.max(1, Math.floor(usableW / minMeasureW));
-            perRow = Math.min(perRow, Math.max(1, measures.length));
-            const measureW = usableW / perRow;
-            const rows = Math.ceil(Math.max(1, measures.length) / perRow);
             const rowH = isDrums ? 130 : 200;
             const bassDY = 90;
-            const totalH = rows * rowH + 2 * margin;
+            const INNER_PAD = 12; // правый запас (дыхание) в нотной зоне такта
+            const voiceList = isDrums ? ['perc'] : ['treble', 'bass'];
+            const clefList = isDrums ? ['percussion'] : ['treble', 'bass'];
 
             const renderer = new VF.Renderer(container, VF.Renderer.Backends.SVG);
-            renderer.resize(width, totalH);
+            renderer.resize(width, Math.max(1, container.clientHeight || 200));
             const ctx = renderer.getContext();
 
+            // Реальная ширина «головы» стана: левый отступ + ключ [+ тональность]
+            // [+ размер], через getNoteStartX временного стана.
+            function headStart(addClef, addTime) {
+                const s = new VF.Stave(0, 0, 500);
+                if (addClef) s.addClef(clefList[0]);
+                if (addClef && !isDrums) s.addKeySignature(score.keySignature || 'C');
+                if (addTime) s.addTimeSignature(score.timeSignature);
+                s.setContext(ctx);
+                s.format();
+                return s.getNoteStartX();
+            }
+            const headFirst = headStart(true, true);   // такт 0: ключ+тональн.+размер
+            const headRowStart = headStart(true, false); // начало строки: ключ+тональн.
+            const headInner = headStart(false, false);   // середина строки: без ключа
+            function headOf(rowStart, isFirst) {
+                return isFirst ? headFirst : (rowStart ? headRowStart : headInner);
+            }
+
+            // проход 1: минимальная ширина содержимого каждого такта
+            const cm = [];
             for (let i = 0; i < measures.length; i++) {
-                const m = measures[i];
-                const row = Math.floor(i / perRow);
-                const col = i % perRow;
-                const x = margin + col * measureW;
-                const yTop = margin + row * rowH;
-                const rowStart = col === 0;
-                const isFirst = i === 0;
+                const vs = voiceList.map(function (v, vi) {
+                    return buildVoice(VF, measures[i][v] || [], clefList[vi],
+                        beats, beatValue, -1, i, v);
+                });
+                cm.push(Math.max(40, measureMinWidth(VF, vs)));
+            }
 
-                try {
-                    if (isDrums) {
-                        const stave = new VF.Stave(x, yTop + 20, measureW);
-                        if (rowStart) stave.addClef('percussion');
-                        if (isFirst) stave.addTimeSignature(score.timeSignature);
-                        stave.setContext(ctx).draw();
+            // проход 2: упаковка в строки — добавляем такты, пока строка
+            // помещается БЕЗ сжатия (Σголов + Σсодержимого ≤ usableW).
+            const layoutRows = [];
+            for (let i = 0; i < measures.length;) {
+                const items = [];
+                let sumHead = 0, sumE = 0;
+                while (i < measures.length) {
+                    const h = headOf(items.length === 0, i === 0);
+                    const e = cm[i] + INNER_PAD;
+                    if (items.length > 0 && sumHead + sumE + h + e > usableW) break;
+                    items.push(i); sumHead += h; sumE += e; i++;
+                }
+                layoutRows.push(items);
+            }
+            const rows = layoutRows.length;
+            const totalH = rows * rowH + 2 * margin;
+            renderer.resize(width, totalH);
 
-                        const cIdx = (cursor.measure === i && cursor.voice === 'perc')
-                            ? cursor.index : -1;
-                        const v = buildVoice(VF, m.perc, 'percussion', beats, beatValue, cIdx, i, 'perc');
-                        formatAndDraw(VF, ctx, [v], [stave], measureW, rowStart, isFirst, beats, beatValue);
-                    } else {
-                        const treble = new VF.Stave(x, yTop, measureW);
-                        const bass = new VF.Stave(x, yTop + bassDY, measureW);
-                        if (rowStart) { treble.addClef('treble'); bass.addClef('bass'); }
-                        if (isFirst) {
-                            treble.addKeySignature(score.keySignature || 'C');
-                            bass.addKeySignature(score.keySignature || 'C');
-                            treble.addTimeSignature(score.timeSignature);
-                            bass.addTimeSignature(score.timeSignature);
+            // геометрия каждого такта {row, x, w} — для playhead/скролла
+            const geom = new Array(measures.length);
+
+            // проход 3: распределение ширины по содержимому + отрисовка
+            for (let r = 0; r < rows; r++) {
+                const items = layoutRows[r];
+                const yTop = margin + r * rowH;
+                let sumHead = 0, sumE = 0;
+                const es = items.map(function (mi, col) {
+                    const e = cm[mi] + INNER_PAD;
+                    sumE += e;
+                    sumHead += headOf(col === 0, mi === 0);
+                    return e;
+                });
+                const flexible = Math.max(0, usableW - sumHead);
+                // Σсодержимого больше гибкого места -> равномерно сжать (ratio<1);
+                // меньше -> разлить остаток пропорц. содержимому (justify), но
+                // последнюю (неполную) систему НЕ растягиваем — естественный вид.
+                const ratio = sumE > flexible ? flexible / sumE : 1;
+                const isLastRow = r === rows - 1;
+                const extra = (!isLastRow && sumE < flexible) ? (flexible - sumE) : 0;
+                let x = margin;
+
+                for (let col = 0; col < items.length; col++) {
+                    const i = items[col];
+                    const m = measures[i];
+                    const rowStart = col === 0;
+                    const isFirst = i === 0;
+                    const contentW = es[col] * ratio +
+                        (sumE > 0 ? extra * (es[col] / sumE) : 0);
+                    const w = headOf(rowStart, isFirst) + contentW;
+                    geom[i] = { row: r, x: x, w: w };
+
+                    try {
+                        if (isDrums) {
+                            const stave = new VF.Stave(x, yTop + 20, w);
+                            if (rowStart) stave.addClef('percussion');
+                            if (isFirst) stave.addTimeSignature(score.timeSignature);
+                            stave.setContext(ctx).draw();
+
+                            const cIdx = (cursor.measure === i && cursor.voice === 'perc')
+                                ? cursor.index : -1;
+                            const v = buildVoice(VF, m.perc, 'percussion', beats, beatValue, cIdx, i, 'perc');
+                            formatAndDraw(VF, ctx, [v], [stave], w, rowStart, isFirst, beats, beatValue);
+                        } else {
+                            const treble = new VF.Stave(x, yTop, w);
+                            const bass = new VF.Stave(x, yTop + bassDY, w);
+                            if (rowStart) { treble.addClef('treble'); bass.addClef('bass'); }
+                            if (isFirst) {
+                                treble.addKeySignature(score.keySignature || 'C');
+                                bass.addKeySignature(score.keySignature || 'C');
+                                treble.addTimeSignature(score.timeSignature);
+                                bass.addTimeSignature(score.timeSignature);
+                            }
+                            treble.setContext(ctx).draw();
+                            bass.setContext(ctx).draw();
+
+                            const tIdx = (cursor.measure === i && cursor.voice === 'treble')
+                                ? cursor.index : -1;
+                            const bIdx = (cursor.measure === i && cursor.voice === 'bass')
+                                ? cursor.index : -1;
+                            const tv = buildVoice(VF, m.treble, 'treble', beats, beatValue, tIdx, i, 'treble');
+                            const bv = buildVoice(VF, m.bass, 'bass', beats, beatValue, bIdx, i, 'bass');
+                            formatAndDraw(VF, ctx, [tv, bv], [treble, bass], w, rowStart, isFirst, beats, beatValue);
+
+                            if (rowStart) {
+                                new VF.StaveConnector(treble, bass)
+                                    .setType(VF.StaveConnector.type.BRACE).setContext(ctx).draw();
+                                new VF.StaveConnector(treble, bass)
+                                    .setType(VF.StaveConnector.type.SINGLE_LEFT).setContext(ctx).draw();
+                            }
                         }
-                        treble.setContext(ctx).draw();
-                        bass.setContext(ctx).draw();
-
-                        const tIdx = (cursor.measure === i && cursor.voice === 'treble')
-                            ? cursor.index : -1;
-                        const bIdx = (cursor.measure === i && cursor.voice === 'bass')
-                            ? cursor.index : -1;
-                        const tv = buildVoice(VF, m.treble, 'treble', beats, beatValue, tIdx, i, 'treble');
-                        const bv = buildVoice(VF, m.bass, 'bass', beats, beatValue, bIdx, i, 'bass');
-                        formatAndDraw(VF, ctx, [tv, bv], [treble, bass], measureW, rowStart, isFirst, beats, beatValue);
-
-                        if (rowStart) {
-                            new VF.StaveConnector(treble, bass)
-                                .setType(VF.StaveConnector.type.BRACE).setContext(ctx).draw();
-                            new VF.StaveConnector(treble, bass)
-                                .setType(VF.StaveConnector.type.SINGLE_LEFT).setContext(ctx).draw();
-                        }
+                    } catch (err) {
+                        console.error('Render measure ' + i + ' failed:', err);
                     }
-                } catch (err) {
-                    console.error('Render measure ' + i + ' failed:', err);
+                    x += w;
                 }
             }
 
@@ -281,9 +355,11 @@
                 noteHitIndex[noteHits[h].id] = noteHits[h];
             }
 
-            // геометрия раскладки — нужна экспортёру и плееру
+            // геометрия раскладки — нужна плееру и автоскроллу.
+            // geom[i] = {row, x, w}: число тактов в строке переменное, поэтому
+            // строку/координаты такта берём отсюда, а не из фиксированного perRow.
             lastLayout = { width: width, totalH: totalH, rowH: rowH, rows: rows,
-                           perRow: perRow, margin: margin };
+                           geom: geom, margin: margin };
 
             // если идёт воспроизведение — пересобрать события под новую раскладку
             Playback.onRender();
@@ -306,8 +382,9 @@
             const y = prevY || 0;
             let target = y;
             const mi = cursor ? cursor.measure : -1;
-            if (mi != null && mi >= 0) {
-                const row = Math.floor(mi / lastLayout.perRow);
+            const g = (mi != null && mi >= 0 && lastLayout.geom) ? lastLayout.geom[mi] : null;
+            if (g) {
+                const row = g.row;
                 const rowTop = PAD + lastLayout.margin + row * lastLayout.rowH;
                 const rowBottom = rowTop + lastLayout.rowH;
                 if (rowTop < y) target = rowTop - 8;
@@ -347,11 +424,28 @@
         function formatAndDraw(VF, ctx, voices, staves, measureW, rowStart, isFirst, beats, beatValue) {
             const fmt = new VF.Formatter();
             voices.forEach((v) => fmt.joinVoices([v]));
-            let pad = 24;
-            if (rowStart) pad += 36;   // место под ключ
-            if (isFirst) pad += 46;    // размер + тональность
-            const fw = Math.max(50, measureW - pad);
-            fmt.format(voices, fw);
+            // Ширину нотной зоны берём из РЕАЛЬНОЙ геометрии стана (после ключа/
+            // размера/тональности). Старт нот выравниваем по всем станам системы.
+            let startX = 0;
+            staves.forEach((s) => { startX = Math.max(startX, s.getNoteStartX()); });
+            staves.forEach((s) => s.setNoteStartX(startX));
+            const staveEnd = staves[0].getX() + staves[0].getWidth();
+            const avail = Math.max(40, staveEnd - startX - 12); // 12 — запас справа
+
+            // Минимально необходимая ширина содержимого. Если она больше доступной
+            // (такт физически плотнее ширины экрана — много 16/32/64), форматируем
+            // по натуральной ширине и СЖИМАЕМ ноты по горизонтали через <g scale>,
+            // чтобы они уместились в барлайн. Линии стана при этом не трогаем.
+            const minW = fmt.preCalculateMinTotalWidth(voices);
+            const sx = minW > avail ? avail / minW : 1;
+            fmt.format(voices, sx < 1 ? minW : avail);
+
+            // Сжатие по X вокруг startX: x' = startX + sx*(x - startX).
+            let grp = null;
+            if (sx < 1 && ctx.openGroup) {
+                ctx.openGroup('sq');
+                grp = ctx.parent; // openGroup выставляет parent = новый <g>
+            }
 
             const groups = beamGroups(VF, beats, beatValue);
             voices.forEach((v, idx) => {
@@ -365,19 +459,26 @@
                 v.draw(ctx, staves[idx]);
                 beams.forEach((b) => b.setContext(ctx).draw());
 
-                // координаты нот для тап-навигации
+                // координаты нот для тап-навигации (с учётом горизонтального сжатия)
                 v.getTickables().forEach((t) => {
                     if (!t.__hit) return;
                     let bb;
                     try { bb = t.getBoundingBox(); } catch (e) { return; }
                     if (!bb) return;
+                    const hx = startX + (bb.getX() - startX) * sx;
                     noteHits.push({
                         id: t.__hit.m + ':' + t.__hit.v + ':' + t.__hit.i,
                         m: t.__hit.m, v: t.__hit.v, i: t.__hit.i,
-                        x: bb.getX(), y: bb.getY(), w: bb.getW(), h: bb.getH(),
+                        x: hx, y: bb.getY(), w: bb.getW() * sx, h: bb.getH(),
                     });
                 });
             });
+
+            if (grp) {
+                ctx.closeGroup();
+                grp.setAttribute('transform',
+                    'translate(' + (startX * (1 - sx)) + ',0) scale(' + sx + ',1)');
+            }
         }
 
         // Тап по партитуре -> ближайшая нота -> курсор во Flutter.
@@ -1032,11 +1133,8 @@
             _buildXMap: function () {
                 const lay = lastLayout;
                 const rows = lay ? lay.rows : 1;
-                const perRow = lay ? lay.perRow : 1;
-                const margin = lay ? lay.margin : 8;
+                const geom = (lay && lay.geom) || [];
                 const measureQ = this.comp.measureQ || 4;
-                const totalMeasures = Math.max(1, Math.round(this.comp.totalBeats / measureQ));
-                const measureW = lay ? (lay.width - 2 * margin) / perRow : 0;
 
                 const byRow = [];
                 for (let r = 0; r < rows; r++) byRow.push({});
@@ -1047,13 +1145,26 @@
                     const hb = noteHitIndex[e.noteId];
                     if (!hb) continue;
                     const mIdx = Math.floor(e.startBeat / measureQ + 1e-6);
-                    const row = Math.floor(mIdx / perRow);
-                    if (row < 0 || row >= rows) continue;
-                    const slot = byRow[row];
+                    const g = geom[mIdx];
+                    if (!g) continue;
+                    const slot = byRow[g.row];
                     const key = e.startBeat.toFixed(4);
                     if (!slot[key]) slot[key] = { beat: e.startBeat, sum: 0, n: 0 };
                     slot[key].sum += hb.x + hb.w / 2;
                     slot[key].n++;
+                }
+
+                // правый край и последний такт каждой строки (для замыкающего
+                // якоря — куда доезжает линия на долгих нотах в конце системы)
+                const rowRight = [], rowLastBeat = [];
+                for (let r = 0; r < rows; r++) { rowRight.push(0); rowLastBeat.push(0); }
+                for (let mi = 0; mi < geom.length; mi++) {
+                    const g = geom[mi];
+                    if (!g) continue;
+                    const right = g.x + g.w;
+                    if (right > rowRight[g.row]) rowRight[g.row] = right;
+                    const endBeat = (mi + 1) * measureQ;
+                    if (endBeat > rowLastBeat[g.row]) rowLastBeat[g.row] = endBeat;
                 }
 
                 const xmap = [];
@@ -1063,16 +1174,9 @@
                     for (const key in slot)
                         arr.push({ beat: slot[key].beat, x: slot[key].sum / slot[key].n });
                     arr.sort(function (a, b) { return a.beat - b.beat; });
-
-                    // правый барлайн последнего такта строки — куда доезжает
-                    // линия на долгих нотах в конце системы
-                    const lastM = Math.min((r + 1) * perRow, totalMeasures) - 1;
-                    if (lastM >= r * perRow) {
-                        const rowEndBeat = (lastM + 1) * measureQ;
-                        const rightX = margin + ((lastM % perRow) + 1) * measureW - 6;
-                        if (arr.length === 0 || arr[arr.length - 1].beat < rowEndBeat - 1e-6)
-                            arr.push({ beat: rowEndBeat, x: rightX });
-                    }
+                    if (rowLastBeat[r] > 0 &&
+                        (arr.length === 0 || arr[arr.length - 1].beat < rowLastBeat[r] - 1e-6))
+                        arr.push({ beat: rowLastBeat[r], x: rowRight[r] - 6 });
                     xmap.push(arr);
                 }
                 this.xmap = xmap;
@@ -1170,12 +1274,12 @@
             _rowForBeat: function (curBeat) {
                 const measureQ = this.comp.measureQ || 4;
                 const total = this.comp.totalBeats;
-                const perRow = lastLayout ? lastLayout.perRow : 1;
+                const geom = (lastLayout && lastLayout.geom) || [];
                 const totalMeasures = Math.max(1, Math.round(total / measureQ));
                 let mIdx = Math.floor(Math.max(0, Math.min(curBeat, total)) / measureQ + 1e-6);
                 if (mIdx >= totalMeasures) mIdx = totalMeasures - 1;
                 if (mIdx < 0) mIdx = 0;
-                return Math.floor(mIdx / perRow);
+                return geom[mIdx] ? geom[mIdx].row : 0;
             },
 
             // Vertical Follow Playback: пока playhead внутри текущей системы —
@@ -1609,6 +1713,41 @@
             loadDrums: function () {
                 const ctx = AudioEngine.ensure();
                 if (ctx) SampledDrums.load(ctx, AudioEngine.master);
+            },
+
+            // Диагностика layout: для такта 4/4, забитого N равными нотами,
+            // выводит minWidth (VexFlow) и assignedWidth (наш layout-движок).
+            // Возвращает массив и пишет таблицу в консоль WebView.
+            debugMeasureWidths: function () {
+                const VF = Vex.Flow;
+                const cont = el('notation-container');
+                const usableW = Math.max(320, cont.clientWidth) - 16; // 2*margin
+                const cases = [['16-е', '16', 16], ['32-е', '32', 32], ['64-е', '64', 64]];
+                const head = 24 + 36 + 46; // ключ + размер + тональность (первый такт)
+                const avail = Math.max(40, usableW - head); // доступная зона нот
+                const rows = cases.map(function (c) {
+                    const notes = [];
+                    for (let i = 0; i < c[2]; i++)
+                        notes.push({ keys: ['c/5'], duration: c[1], dots: 0 });
+                    const v = buildVoice(VF, notes, 'treble', 4, 4, -1, 0, 'treble');
+                    const minW = measureMinWidth(VF, [v]);
+                    const sx = minW > avail ? avail / minW : 1; // как в formatAndDraw
+                    return {
+                        case: c[0], count: c[2],
+                        minWidth: Math.round(minW),
+                        availWidth: Math.round(avail),
+                        scaleX: Math.round(sx * 100) / 100,
+                        // ноты всегда умещаются: при minW>avail сжимаются по X
+                        fits: true,
+                    };
+                });
+                console.table(rows);
+                rows.forEach(function (r) {
+                    console.log('[layout] ' + r.case + ' (' + r.count + '): minWidth=' +
+                        r.minWidth + 'px availWidth=' + r.availWidth +
+                        'px scaleX=' + r.scaleX + ' fits=' + r.fits);
+                });
+                return rows;
             },
         };
 
