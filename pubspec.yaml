@@ -17,6 +17,9 @@ dependencies:
   path_provider: ^2.1.4
   # Идентификаторы партитур
   uuid: ^4.5.1
+  # Launch screen: preserve()/remove() — рантайм-API, поэтому обычная зависимость
+  # (не dev), хотя генерация ресурсов идёт через CLI dart run …:create.
+  flutter_native_splash: ^2.4.4
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -35,8 +38,26 @@ flutter:
     - assets/www/piano/
     # Сэмплы ударной установки (оффлайн). Файлы кладёт tools/fetch_drums.mjs.
     - assets/www/drums/
+    # Иконка приложения — нужна и Flutter-splash в рантайме (Image.asset).
+    - assets/icon/icon.png
 
 flutter_launcher_icons:
   android: true
   ios: true
   image_path: "assets/icon/icon.png"
+
+# Launch screen (нативный splash до старта Flutter). ТОЛЬКО тёмный фон в тему —
+# без иконки: иначе ОС показывает крупную иконку, а затем сменяет её на наш
+# брендовый Flutter-экран (иконка + «ScoreFlow» + подпись), что читается как
+# скачок. Фон совпадает с splash_screen.dart, поэтому первым «настоящим» кадром
+# сразу виден брендовый экран без промежуточной стадии.
+# (Native splash не умеет текст; на Android 12+ ОС всё равно кратко покажет
+#  launcher-иконку — это ограничение системы, не настраивается.)
+# Перегенерация: dart run flutter_native_splash:create
+flutter_native_splash:
+  color: "#141218"
+  android: true
+  ios: true
+  fullscreen: false
+  android_12:
+    color: "#141218"
