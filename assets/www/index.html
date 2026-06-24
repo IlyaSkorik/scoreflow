@@ -944,7 +944,7 @@
             raf: null,
             nextEvent: 0,        // указатель в comp.events
             nextClickBeat: 0,    // следующая доля метронома (в долях такта)
-            primaryEvents: [],   // события главного голоса (для playhead, c rest)
+            xmap: [],            // beat->X по строкам (playhead по муз. времени)
             _hl: {},             // активные элементы подсветки по noteId
 
             isPlaying: function () { return this.playing; },
@@ -957,10 +957,59 @@
             },
             secForBeat: function (q) { return this.startTime + q * this.secPerQuarter; },
 
-            _filterPrimary: function () {
-                const pv = this.comp.primaryVoice;
-                this.primaryEvents = this.comp.events.filter(
-                    function (e) { return e.voiceId === pv; });
+            // Карта «музыкальное время -> X» для КАЖДОЙ строки Grand Staff.
+            // Якоря берём из onset'ов ОБОИХ голосов (и пауз — у них тоже есть
+            // bbox), поэтому при длинной ноте в одной руке движение второй даёт
+            // промежуточные точки и playhead не «застывает». Одновременные
+            // onset'ы (аккорд / treble+bass на одной доле) усредняются в один X.
+            // Замыкающий якорь ставим у правого барлайна строки.
+            _buildXMap: function () {
+                const lay = lastLayout;
+                const rows = lay ? lay.rows : 1;
+                const perRow = lay ? lay.perRow : 1;
+                const margin = lay ? lay.margin : 8;
+                const measureQ = this.comp.measureQ || 4;
+                const totalMeasures = Math.max(1, Math.round(this.comp.totalBeats / measureQ));
+                const measureW = lay ? (lay.width - 2 * margin) / perRow : 0;
+
+                const byRow = [];
+                for (let r = 0; r < rows; r++) byRow.push({});
+
+                const ev = this.comp.events;
+                for (let i = 0; i < ev.length; i++) {
+                    const e = ev[i];
+                    const hb = noteHitIndex[e.noteId];
+                    if (!hb) continue;
+                    const mIdx = Math.floor(e.startBeat / measureQ + 1e-6);
+                    const row = Math.floor(mIdx / perRow);
+                    if (row < 0 || row >= rows) continue;
+                    const slot = byRow[row];
+                    const key = e.startBeat.toFixed(4);
+                    if (!slot[key]) slot[key] = { beat: e.startBeat, sum: 0, n: 0 };
+                    slot[key].sum += hb.x + hb.w / 2;
+                    slot[key].n++;
+                }
+
+                const xmap = [];
+                for (let r = 0; r < rows; r++) {
+                    const arr = [];
+                    const slot = byRow[r];
+                    for (const key in slot)
+                        arr.push({ beat: slot[key].beat, x: slot[key].sum / slot[key].n });
+                    arr.sort(function (a, b) { return a.beat - b.beat; });
+
+                    // правый барлайн последнего такта строки — куда доезжает
+                    // линия на долгих нотах в конце системы
+                    const lastM = Math.min((r + 1) * perRow, totalMeasures) - 1;
+                    if (lastM >= r * perRow) {
+                        const rowEndBeat = (lastM + 1) * measureQ;
+                        const rightX = margin + ((lastM % perRow) + 1) * measureW - 6;
+                        if (arr.length === 0 || arr[arr.length - 1].beat < rowEndBeat - 1e-6)
+                            arr.push({ beat: rowEndBeat, x: rightX });
+                    }
+                    xmap.push(arr);
+                }
+                this.xmap = xmap;
             },
 
             // вызывается из render(): пересобрать события под правки в редакторе
@@ -968,7 +1017,7 @@
                 if (!this.playing || !lastPayload) return;
                 const curBeat = this.currentBeat();
                 this.comp = compilePlayback(lastPayload);
-                this._filterPrimary();
+                this._buildXMap();
                 this.nextEvent = 0;
                 while (this.nextEvent < this.comp.events.length &&
                        this.comp.events[this.nextEvent].startBeat < curBeat) this.nextEvent++;
@@ -982,7 +1031,7 @@
                 this.stop(true); // сброс прежней сессии без снятия активности UI
                 this.secPerQuarter = 60 / (Number(tempo) || 120);
                 this.comp = compilePlayback(payload);
-                this._filterPrimary();
+                this._buildXMap();
                 if (this.comp.events.length === 0) return;
                 this.playing = true;
                 this.nextEvent = 0;
@@ -1049,38 +1098,41 @@
                 this.raf = requestAnimationFrame(function () { self._frame(); });
             },
 
-            _rowOf: function (measureIndex) {
-                if (!lastLayout || !lastLayout.perRow) return 0;
-                return Math.floor(measureIndex / lastLayout.perRow);
-            },
-            _measureOf: function (noteId) { return noteId.split(':')[0] | 0; },
-
+            // Позиция playhead = музыкальное время (curBeat), а НЕ последняя
+            // сыгранная нота. Строку определяем по такту текущей доли, X —
+            // интерполяцией между beat-якорями строки (онсеты обоих голосов).
             _positionPlayhead: function (curBeat) {
                 const ph = el('playhead');
-                const pe = this.primaryEvents;
-                if (pe.length === 0) return;
-                let k = 0;
-                while (k + 1 < pe.length && pe[k + 1].startBeat <= curBeat) k++;
-                const cur = pe[k];
-                const hb = noteHitIndex[cur.noteId];
-                if (!hb) return;
-                let x = hb.x + hb.w / 2;
-                const nxt = pe[k + 1];
-                if (nxt) {
-                    const nb = noteHitIndex[nxt.noteId];
-                    const sameRow = nb &&
-                        this._rowOf(this._measureOf(nxt.noteId)) ===
-                        this._rowOf(this._measureOf(cur.noteId));
-                    if (nb && sameRow) {
-                        const span = nxt.startBeat - cur.startBeat;
-                        const frac = span > 0
-                            ? Math.min(1, Math.max(0, (curBeat - cur.startBeat) / span)) : 0;
-                        x += frac * ((nb.x + nb.w / 2) - (hb.x + hb.w / 2));
-                    }
+                if (!this.xmap || !this.xmap.length) return;
+                const measureQ = this.comp.measureQ || 4;
+                const total = this.comp.totalBeats;
+                const perRow = lastLayout ? lastLayout.perRow : 1;
+                const totalMeasures = Math.max(1, Math.round(total / measureQ));
+
+                const b = Math.max(0, Math.min(curBeat, total));
+                let mIdx = Math.floor(b / measureQ + 1e-6);
+                if (mIdx >= totalMeasures) mIdx = totalMeasures - 1;
+                if (mIdx < 0) mIdx = 0;
+                const row = Math.floor(mIdx / perRow);
+                const anchors = this.xmap[row];
+                if (!anchors || anchors.length === 0) return;
+
+                let x;
+                if (b <= anchors[0].beat) {
+                    x = anchors[0].x;
+                } else if (b >= anchors[anchors.length - 1].beat) {
+                    x = anchors[anchors.length - 1].x;
+                } else {
+                    let k = 0;
+                    while (k + 1 < anchors.length && anchors[k + 1].beat <= b) k++;
+                    const a = anchors[k], c = anchors[k + 1];
+                    const span = c.beat - a.beat;
+                    const frac = span > 0 ? (b - a.beat) / span : 0;
+                    x = a.x + frac * (c.x - a.x);
                 }
+
                 const rowH = lastLayout ? lastLayout.rowH : 200;
                 const margin = lastLayout ? lastLayout.margin : 8;
-                const row = this._rowOf(this._measureOf(cur.noteId));
                 ph.style.left = (PAD + x) + 'px';
                 ph.style.top = (PAD + margin + row * rowH) + 'px';
                 ph.style.height = (rowH - 8) + 'px';
