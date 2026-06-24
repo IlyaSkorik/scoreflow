@@ -21,6 +21,7 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.14.4
 
 flutter:
   uses-material-design: true
@@ -34,3 +35,8 @@ flutter:
     - assets/www/piano/
     # Сэмплы ударной установки (оффлайн). Файлы кладёт tools/fetch_drums.mjs.
     - assets/www/drums/
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/icon.png"
