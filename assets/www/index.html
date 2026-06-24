@@ -191,6 +191,9 @@
                 return;
             }
             const VF = Vex.Flow;
+            // Позицию скролла фиксируем ДО пересборки SVG: удаление полотна
+            // схлопывает документ и браузер сбрасывает scrollY в 0.
+            const prevScrollY = window.scrollY || document.documentElement.scrollTop || 0;
             clearCanvas();
             noteHits = [];
 
@@ -285,7 +288,37 @@
             // если идёт воспроизведение — пересобрать события под новую раскладку
             Playback.onRender();
 
+            // Пересборка SVG сбрасывает прокрутку документа в начало. Чтобы при
+            // вводе нот вид не «прыгал» наверх, удерживаем строку с курсором в
+            // зоне видимости минимальным доводом скролла. Во время плеера этим
+            // занимается Follow Playback — здесь не вмешиваемся.
+            if (!Playback.isPlaying()) keepCursorInView(cursor, prevScrollY);
+
             attachTapListener();
+        }
+
+        // Восстанавливаем прежнюю прокрутку [prevY] после пересборки SVG. Если
+        // строка курсора выходит за вьюпорт — минимально доводим её к краю;
+        // иначе вид остаётся ровно там, где был (без «прыжка» наверх).
+        function keepCursorInView(cursor, prevY) {
+            if (!lastLayout) return;
+            const vh = window.innerHeight || document.documentElement.clientHeight;
+            const y = prevY || 0;
+            let target = y;
+            const mi = cursor ? cursor.measure : -1;
+            if (mi != null && mi >= 0) {
+                const row = Math.floor(mi / lastLayout.perRow);
+                const rowTop = PAD + lastLayout.margin + row * lastLayout.rowH;
+                const rowBottom = rowTop + lastLayout.rowH;
+                if (rowTop < y) target = rowTop - 8;
+                else if (rowBottom > y + vh) target = rowBottom - vh + 8;
+            }
+            const docH = Math.max(
+                document.documentElement.scrollHeight, document.body.scrollHeight);
+            target = Math.max(0, Math.min(target, Math.max(0, docH - vh)));
+            // Всегда восстанавливаем скролл: после пересборки браузер уже мог
+            // сбросить его в 0, поэтому даже target == prevY нужно применить.
+            window.scrollTo(0, target);
         }
 
         // Группы для бимовки (как в профессиональных редакторах: по долям).
