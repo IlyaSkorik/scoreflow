@@ -30,6 +30,7 @@ class _EditorScreenState extends State<EditorScreen> {
   Score? _score;
   final EditorCursor _cursor = EditorCursor();
   String _duration = 'q';
+  int _dots = 0; // 0 = без точки, 1 = пунктир (модель расширяема до 2–3)
   bool _isPlaying = false;
   bool _metronome = false;
   bool _sustain = false;
@@ -57,7 +58,10 @@ class _EditorScreenState extends State<EditorScreen> {
     _cursor.voice = s.instrument.voiceIds.first;
     _cursor.measure = 0;
     _cursor.index = _voiceOf(s, 0, _cursor.voice).length - 1;
-    setState(() => _score = s);
+    setState(() {
+      _score = s;
+      _normalize(); // добивка пауз/целостность тактов до первого рендера
+    });
     _render();
     _maybeLoadSamples();
   }
@@ -72,8 +76,10 @@ class _EditorScreenState extends State<EditorScreen> {
   double get _capacity =>
       _score!.timeSignature.beats / _score!.timeSignature.beatValue;
 
-  double _filled(List<MusicNote> notes) =>
-      notes.fold(0.0, (s, n) => s + (durationFraction[n.duration] ?? 0));
+  // Заполненность реальным материалом — авто-паузы добивки не учитываем,
+  // иначе индикатор всегда показывал бы «полный такт».
+  double _filled(List<MusicNote> notes) => notes.fold(
+      0.0, (s, n) => s + (n.auto ? 0 : noteFraction(n.duration, n.dots)));
 
   // --- мост к движку ---------------------------------------------------
   void _render() {
@@ -111,23 +117,28 @@ class _EditorScreenState extends State<EditorScreen> {
   void _normalize() {
     final s = _score!;
     final cap = _capacity;
+    final beats = s.timeSignature.beats;
+    final beatValue = s.timeSignature.beatValue;
     final cv = _cursor.voice;
     final keepCount = s.measures.length;
 
-    // нота под курсором (по ссылке), чтобы потом вернуть курсор на неё
+    // нота под курсором (по ссылке), чтобы потом вернуть курсор на неё.
+    // Авто-паузы добивки пересоздаются — на них курсор не закрепляем.
     final curList = _voiceOf(s, _cursor.measure, cv);
     final MusicNote? cursorNote =
-        (_cursor.index >= 0 && _cursor.index < curList.length)
+        (_cursor.index >= 0 && _cursor.index < curList.length &&
+                !curList[_cursor.index].auto)
             ? curList[_cursor.index]
             : null;
 
-    // упаковка каждого голоса в «корзины» (такты) по capacity
+    // упаковка каждого голоса в «корзины» (такты) по capacity.
+    // Авто-паузы выбрасываем перед упаковкой — иначе добивка накапливалась бы.
     final bins = <String, List<List<MusicNote>>>{};
     var maxBins = 1;
     for (final v in s.instrument.voiceIds) {
       final flat = <MusicNote>[];
       for (final m in s.measures) {
-        flat.addAll(m.voice(v));
+        flat.addAll(m.voice(v).where((n) => !n.auto));
       }
       final packed = packVoice(flat, cap);
       bins[v] = packed;
@@ -141,6 +152,22 @@ class _EditorScreenState extends State<EditorScreen> {
         for (final v in s.instrument.voiceIds)
           v: i < bins[v]!.length ? bins[v]![i] : <MusicNote>[],
       }));
+    }
+
+    // Целостность такта: каждый частично заполненный такт добиваем
+    // каноническими паузами. Полностью пустые такты оставляем пустыми —
+    // движок рисует им целую паузу (центрированную, как принято).
+    for (final m in measures) {
+      for (final v in s.instrument.voiceIds) {
+        final notes = m.voice(v);
+        if (notes.isEmpty) continue;
+        final filled = notes.fold(
+            0.0, (sum, n) => sum + noteFraction(n.duration, n.dots));
+        final remainder = cap - filled;
+        if (remainder > 1e-6) {
+          notes.addAll(fillRests(filled, remainder, beats, beatValue));
+        }
+      }
     }
     s.measures = measures;
 
@@ -179,7 +206,9 @@ class _EditorScreenState extends State<EditorScreen> {
         notes[i]
           ..keys = keys
           ..rest = rest
-          ..duration = _duration;
+          ..duration = _duration
+          ..dots = _dots
+          ..auto = false;
         return;
       }
 
@@ -189,14 +218,17 @@ class _EditorScreenState extends State<EditorScreen> {
         notes[next]
           ..keys = keys
           ..rest = rest
-          ..duration = _duration;
+          ..duration = _duration
+          ..dots = _dots
+          ..auto = false;
         _cursor.index = next;
         return;
       }
 
       // 3) иначе вставляем после курсора
       final pos = next.clamp(0, notes.length);
-      notes.insert(pos, MusicNote(keys: keys, duration: _duration, rest: rest));
+      notes.insert(pos,
+          MusicNote(keys: keys, duration: _duration, dots: _dots, rest: rest));
       _cursor.index = pos;
     });
   }
@@ -466,9 +498,11 @@ class _EditorScreenState extends State<EditorScreen> {
             score: score,
             cursor: _cursor,
             duration: _duration,
+            dots: _dots,
             filledBeats: filledBeats,
             totalBeats: totalBeats,
             onDuration: (d) => setState(() => _duration = d),
+            onDots: (v) => setState(() => _dots = v),
             onInsert: (keys) => _insertNote(keys: keys),
             onRest: () => _insertNote(keys: const [], rest: true),
             onDelete: _deleteAtCursor,
@@ -504,9 +538,11 @@ class _EditorPanel extends StatelessWidget {
   final Score score;
   final EditorCursor cursor;
   final String duration;
+  final int dots;
   final double filledBeats;
   final int totalBeats;
   final ValueChanged<String> onDuration;
+  final ValueChanged<int> onDots;
   final ValueChanged<List<String>> onInsert;
   final VoidCallback onRest;
   final VoidCallback onDelete;
@@ -519,9 +555,11 @@ class _EditorPanel extends StatelessWidget {
     required this.score,
     required this.cursor,
     required this.duration,
+    required this.dots,
     required this.filledBeats,
     required this.totalBeats,
     required this.onDuration,
+    required this.onDots,
     required this.onInsert,
     required this.onRest,
     required this.onDelete,
@@ -671,6 +709,17 @@ class _EditorPanel extends StatelessWidget {
                 onSelected: (_) => onDuration(e.key),
               ),
             ),
+          // Тумблер пунктира: применяется к следующему вводимому слоту.
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 3),
+            child: ChoiceChip(
+              label: const Text('♩.', style: TextStyle(fontSize: 20)),
+              labelPadding: const EdgeInsets.symmetric(horizontal: 10),
+              tooltip: 'Нота с точкой',
+              selected: dots > 0,
+              onSelected: (_) => onDots(dots > 0 ? 0 : 1),
+            ),
+          ),
         ],
       ),
     );

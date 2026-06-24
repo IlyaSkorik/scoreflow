@@ -150,16 +150,23 @@
             } else {
                 notes.forEach((n, i) => {
                     const isRest = !!n.rest;
+                    const dots = n.dots || 0;
                     const dur = isRest ? n.duration + 'r' : n.duration;
                     const keys = isRest ? [REST_KEY[clef]] : n.keys;
                     const sn = new VF.StaveNote({
-                        keys: keys, duration: dur, clef: clef, auto_stem: true,
+                        keys: keys, duration: dur, dots: dots,
+                        clef: clef, auto_stem: true,
                     });
                     if (!isRest) {
                         keys.forEach((k, ki) => {
                             const acc = accidentalOf(k);
                             if (acc) sn.addModifier(new VF.Accidental(acc), ki);
                         });
+                    }
+                    // Глиф точки нужно навесить явно (по одному модификатору на
+                    // точку); тиковую длительность задаёт опция dots выше.
+                    for (let d = 0; d < dots; d++) {
+                        VF.Dot.buildAndAttach([sn], { all: true });
                     }
                     if (i === cursorIdx) {
                         sn.setStyle({ fillStyle: '#2196F3', strokeStyle: '#2196F3' });
@@ -281,12 +288,26 @@
             attachTapListener();
         }
 
-        // Группы для бимовки: по одной доле в простых размерах и по три
-        // восьмых в составных (6/8, 9/8, 12/8). Возвращает массив VF.Fraction.
+        // Группы для бимовки (как в профессиональных редакторах: по долям).
+        //  - составные x/8 кратные 3 (6/8, 9/8, 12/8) -> по пунктирной четверти;
+        //  - нерегулярные 5/8 -> 3+2, 7/8 -> 2+2+3 (распространённая запись);
+        //  - остальное -> штатные группы VexFlow getDefaultBeamGroups (по долям),
+        //    что чинит простые/сложные размеры разом.
+        // Возвращает массив VF.Fraction.
         function beamGroups(VF, beats, beatValue) {
             if (beatValue === 8 && beats % 3 === 0) {
                 return [new VF.Fraction(3, 8)];
             }
+            if (beatValue === 8 && beats === 5) {
+                return [new VF.Fraction(3, 8), new VF.Fraction(2, 8)];
+            }
+            if (beatValue === 8 && beats === 7) {
+                return [new VF.Fraction(2, 8), new VF.Fraction(2, 8), new VF.Fraction(3, 8)];
+            }
+            try {
+                const g = VF.Beam.getDefaultBeamGroups(beats + '/' + beatValue);
+                if (g && g.length) return g;
+            } catch (e) { /* fallback ниже */ }
             return [new VF.Fraction(1, beatValue)];
         }
 
@@ -367,7 +388,16 @@
         // =================================================================
 
         // длительность VexFlow -> доли в ЧЕТВЕРТЯХ (quarter beats)
-        const QBEATS = { w: 4, h: 2, q: 1, '8': 0.5, '16': 0.25 };
+        const QBEATS = { w: 4, h: 2, q: 1, '8': 0.5, '16': 0.25, '32': 0.125, '64': 0.0625 };
+
+        // Доли в четвертях с учётом точек: каждая точка добавляет половину
+        // предыдущего приращения (1 точка = base·1.5, 2 = base·1.75 и т.д.).
+        function durationBeats(dur, dots) {
+            const base = QBEATS[dur] != null ? QBEATS[dur] : 1;
+            let add = base / 2, total = base;
+            for (let d = 0; d < (dots || 0); d++) { total += add; add /= 2; }
+            return total;
+        }
 
         // VexFlow-ключ "c#/4" -> частота (Гц); для ударных не используется
         const SEMI = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
@@ -454,7 +484,7 @@
                     let acc = 0;
                     for (let ni = 0; ni < notes.length; ni++) {
                         const n = notes[ni];
-                        const q = QBEATS[n.duration] != null ? QBEATS[n.duration] : 1;
+                        const q = durationBeats(n.duration, n.dots);
                         events.push({
                             noteId: mi + ':' + v + ':' + ni,
                             startBeat: base + acc,

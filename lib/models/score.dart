@@ -57,31 +57,47 @@ class TimeSignature {
 ///
 /// [keys] — ключи в формате VexFlow: "c/4", аккорд ["c/4","e/4"], а для
 /// ударных — с указанием головки ноты, напр. "g/5/x2" (закрытый хай-хэт).
-/// [duration] — базовая длительность VexFlow: w h q 8 16 (без 'r').
+/// [duration] — базовая длительность VexFlow: w h q 8 16 32 64 (без 'r').
+/// [dots] — число точек (0 = без точки, 1 = пунктир, 2 = двойной пунктир).
+///          Модель расширяема; UI пока выставляет 0/1.
 /// [rest] — если true, рисуется пауза соответствующей длительности.
+/// [auto] — служебный флаг: пауза, автоматически добитая для целостности
+///          такта (см. fillRests/normalize). НЕ сериализуется — добивка
+///          пересчитывается при каждой нормализации, поэтому не накапливается.
 class MusicNote {
   List<String> keys;
   String duration;
+  int dots;
   bool rest;
+  bool auto;
 
   MusicNote({
     required this.keys,
     required this.duration,
+    this.dots = 0,
     this.rest = false,
+    this.auto = false,
   });
 
-  MusicNote copy() =>
-      MusicNote(keys: List.of(keys), duration: duration, rest: rest);
+  MusicNote copy() => MusicNote(
+        keys: List.of(keys),
+        duration: duration,
+        dots: dots,
+        rest: rest,
+        auto: auto,
+      );
 
   Map<String, dynamic> toJson() => {
         'keys': keys,
         'duration': duration,
+        if (dots > 0) 'dots': dots,
         'rest': rest,
       };
 
   factory MusicNote.fromJson(Map<String, dynamic> j) => MusicNote(
         keys: (j['keys'] as List).map((e) => e as String).toList(),
         duration: j['duration'] as String,
+        dots: j['dots'] as int? ?? 0,
         rest: j['rest'] as bool? ?? false,
       );
 }
