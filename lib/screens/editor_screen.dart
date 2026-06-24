@@ -33,6 +33,7 @@ class _EditorScreenState extends State<EditorScreen> {
   bool _isPlaying = false;
   bool _metronome = false;
   bool _sustain = false;
+  bool _follow = true; // Vertical Follow Playback (по умолчанию вкл.)
 
   @override
   void initState() {
@@ -284,6 +285,13 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
+  void _toggleFollow() {
+    setState(() => _follow = !_follow);
+    _web?.evaluateJavascript(
+      source: 'window.ScoreFlow && window.ScoreFlow.setFollowPlayback($_follow);',
+    );
+  }
+
   /// Предзагрузка сэмплов под инструмент партитуры (рояль / ударные).
   /// Идемпотентно — повторные вызовы безопасны.
   void _maybeLoadSamples() {
@@ -375,6 +383,15 @@ class _EditorScreenState extends State<EditorScreen> {
           ),
         ),
         actions: [
+          IconButton(
+            tooltip: _follow
+                ? 'Следовать за воспроизведением: вкл.'
+                : 'Следовать за воспроизведением: выкл.',
+            isSelected: _follow,
+            icon: Icon(_follow ? Icons.swap_vert : Icons.swap_vert_outlined),
+            color: _follow ? Theme.of(context).colorScheme.primary : null,
+            onPressed: _toggleFollow,
+          ),
           IconButton(
             tooltip: 'Сохранить',
             icon: const Icon(Icons.save_outlined),

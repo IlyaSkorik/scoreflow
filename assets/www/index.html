@@ -945,10 +945,13 @@
             nextEvent: 0,        // указатель в comp.events
             nextClickBeat: 0,    // следующая доля метронома (в долях такта)
             xmap: [],            // beat->X по строкам (playhead по муз. времени)
+            followPlayback: true,// Vertical Follow: скролл к новой системе
+            _followRow: -1,      // строка, к которой последний раз скроллили
             _hl: {},             // активные элементы подсветки по noteId
 
             isPlaying: function () { return this.playing; },
             setMetronome: function (on) { this.metronome = !!on; },
+            setFollowPlayback: function (on) { this.followPlayback = !!on; },
 
             currentBeat: function () {
                 const ctx = AudioEngine.ctx;
@@ -1036,6 +1039,7 @@
                 this.playing = true;
                 this.nextEvent = 0;
                 this.nextClickBeat = 0;
+                this._followRow = -1; // первая смена системы вызовет скролл
                 this.startTime = ctx.currentTime + 0.08; // запас на планирование
                 el('playhead').classList.add('active');
                 const self = this;
@@ -1094,8 +1098,45 @@
                 const curBeat = this.currentBeat();
                 this._positionPlayhead(curBeat);
                 this._highlight(curBeat);
+                this._followScroll(this._rowForBeat(curBeat));
                 const self = this;
                 this.raf = requestAnimationFrame(function () { self._frame(); });
+            },
+
+            // Строка (система) для текущей доли — из такта, а не из id ноты.
+            _rowForBeat: function (curBeat) {
+                const measureQ = this.comp.measureQ || 4;
+                const total = this.comp.totalBeats;
+                const perRow = lastLayout ? lastLayout.perRow : 1;
+                const totalMeasures = Math.max(1, Math.round(total / measureQ));
+                let mIdx = Math.floor(Math.max(0, Math.min(curBeat, total)) / measureQ + 1e-6);
+                if (mIdx >= totalMeasures) mIdx = totalMeasures - 1;
+                if (mIdx < 0) mIdx = 0;
+                return Math.floor(mIdx / perRow);
+            },
+
+            // Vertical Follow Playback: пока playhead внутри текущей системы —
+            // ничего не делаем; при переходе на новую систему — ОДИН плавный
+            // вертикальный скролл, ставящий систему примерно по центру экрана.
+            // Скроллим собственный документ WebView (контейнер прокрутки).
+            _followScroll: function (row) {
+                if (!this.followPlayback) return;
+                if (row === this._followRow) return;
+                this._followRow = row;
+                const lay = lastLayout;
+                if (!lay) return;
+                const vh = window.innerHeight || document.documentElement.clientHeight;
+                const rowTop = PAD + lay.margin + row * lay.rowH;
+                const target = rowTop - (vh - lay.rowH) / 2; // система по центру
+                const docH = Math.max(
+                    document.documentElement.scrollHeight, document.body.scrollHeight);
+                const maxY = Math.max(0, docH - vh);
+                const y = Math.max(0, Math.min(target, maxY));
+                try {
+                    window.scrollTo({ top: y, behavior: 'smooth' });
+                } catch (e) {
+                    window.scrollTo(0, y); // старые WebView без smooth-опции
+                }
             },
 
             // Позиция playhead = музыкальное время (curBeat), а НЕ последняя
@@ -1104,16 +1145,9 @@
             _positionPlayhead: function (curBeat) {
                 const ph = el('playhead');
                 if (!this.xmap || !this.xmap.length) return;
-                const measureQ = this.comp.measureQ || 4;
                 const total = this.comp.totalBeats;
-                const perRow = lastLayout ? lastLayout.perRow : 1;
-                const totalMeasures = Math.max(1, Math.round(total / measureQ));
-
                 const b = Math.max(0, Math.min(curBeat, total));
-                let mIdx = Math.floor(b / measureQ + 1e-6);
-                if (mIdx >= totalMeasures) mIdx = totalMeasures - 1;
-                if (mIdx < 0) mIdx = 0;
-                const row = Math.floor(mIdx / perRow);
+                const row = this._rowForBeat(curBeat);
                 const anchors = this.xmap[row];
                 if (!anchors || anchors.length === 0) return;
 
@@ -1486,6 +1520,12 @@
             // Метроном: вкл/выкл. Состояние сохраняется между запусками плеера.
             setMetronome: function (on) {
                 try { Playback.setMetronome(on); } catch (e) { /* no-op */ }
+            },
+
+            // Vertical Follow Playback: вкл/выкл автоскролл к текущей системе.
+            // По умолчанию включён. Состояние сохраняется между запусками.
+            setFollowPlayback: function (on) {
+                try { Playback.setFollowPlayback(on); } catch (e) { /* no-op */ }
             },
 
             // Предзагрузка сэмплов концертного рояля (локальный сервер, оффлайн).
