@@ -9,6 +9,16 @@ import '../models/palette.dart';
 import '../models/reflow.dart';
 import '../models/score.dart';
 
+/// Тональности для пикера в листе «Ещё» (формат VexFlow keySignature).
+const List<String> _keySignatures = [
+  'C', 'G', 'D', 'A', 'E', 'B', 'F#', 'F', 'Bb', 'Eb', 'Ab', 'Db'
+];
+
+/// Размеры такта для пикера в листе «Ещё».
+const List<String> _timeSignatures = [
+  '4/4', '3/4', '2/4', '2/2', '6/8', '9/8', '12/8', '5/8', '7/8', '3/8'
+];
+
 /// Редактор партитуры: WebView-рендер (VexFlow) + панель ввода нот + плеер.
 class EditorScreen extends StatefulWidget {
   final String scoreId;
@@ -448,6 +458,145 @@ class _EditorScreenState extends State<EditorScreen> {
     }
   }
 
+  void _setTempo(int v) {
+    _commit(() => _score!.tempo = v);
+    if (_isPlaying) _sendPlayback('PLAY');
+  }
+
+  /// Нижний лист «Ещё» — редкие действия вне рабочей зоны: точный темп,
+  /// sustain (фортепиано), параметры партитуры (тональность/размер),
+  /// добавление такта, переименование, экспорт PDF.
+  Future<void> _showMoreSheet() async {
+    final score = _score;
+    if (score == null) return;
+    final isPiano = score.instrument == InstrumentType.piano;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      // Контента много (темп+слайдер, sustain, тональность, размер, действия) —
+      // на фортепиано он не влезает в дефолтные 9/16 экрана. Снимаем потолок
+      // высоты и делаем содержимое прокручиваемым, чтобы не переполняло низ.
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
+                  child:
+                      Text('Ещё', style: Theme.of(ctx).textTheme.titleMedium),
+                ),
+                ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                  leading: const Icon(Icons.speed),
+                  title: const Text('Темп'),
+                  trailing: Text('${score.tempo} BPM',
+                      style: const TextStyle(fontWeight: FontWeight.bold)),
+                ),
+                Slider(
+                  value: score.tempo.toDouble().clamp(40, 240),
+                  min: 40,
+                  max: 240,
+                  divisions: 200,
+                  label: '${score.tempo} BPM',
+                  onChanged: (v) {
+                    _setTempo(v.round());
+                    setSheet(() {});
+                  },
+                ),
+                if (isPiano)
+                  SwitchListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                    secondary: const Icon(Icons.piano),
+                    title: const Text('Демпфер-педаль (sustain)'),
+                    value: _sustain,
+                    onChanged: (_) {
+                      _toggleSustain();
+                      setSheet(() {});
+                    },
+                  ),
+                if (isPiano)
+                  ListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                    leading: const Icon(Icons.music_note),
+                    title: const Text('Тональность'),
+                    trailing: DropdownButton<String>(
+                      value: _keySignatures.contains(score.keySignature)
+                          ? score.keySignature
+                          : null,
+                      hint: Text(score.keySignature),
+                      items: [
+                        for (final k in _keySignatures)
+                          DropdownMenuItem(value: k, child: Text(k))
+                      ],
+                      onChanged: (v) {
+                        if (v == null) return;
+                        _commit(() => score.keySignature = v);
+                        setSheet(() {});
+                      },
+                    ),
+                  ),
+                ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                  leading: const Icon(Icons.straighten),
+                  title: const Text('Размер'),
+                  trailing: DropdownButton<String>(
+                    value: _timeSignatures.contains(score.timeSignature.vex)
+                        ? score.timeSignature.vex
+                        : null,
+                    hint: Text(score.timeSignature.vex),
+                    items: [
+                      for (final t in _timeSignatures)
+                        DropdownMenuItem(value: t, child: Text(t))
+                    ],
+                    onChanged: (v) {
+                      if (v == null) return;
+                      _commit(
+                          () => score.timeSignature = TimeSignature.parse(v));
+                      setSheet(() {});
+                    },
+                  ),
+                ),
+                const Divider(height: 8),
+                ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                  leading: const Icon(Icons.playlist_add),
+                  title: const Text('Добавить такт'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _addMeasure();
+                  },
+                ),
+                ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                  leading: const Icon(Icons.drive_file_rename_outline),
+                  title: const Text('Переименовать'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _rename();
+                  },
+                ),
+                ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                  leading: const Icon(Icons.picture_as_pdf_outlined),
+                  title: const Text('Экспорт в PDF'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _exportPdf();
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   // --- UI --------------------------------------------------------------
   @override
   Widget build(BuildContext context) {
@@ -472,34 +621,10 @@ class _EditorScreenState extends State<EditorScreen> {
             ],
           ),
         ),
-        actions: [
-          IconButton(
-            tooltip: _follow
-                ? 'Следовать за воспроизведением: вкл.'
-                : 'Следовать за воспроизведением: выкл.',
-            isSelected: _follow,
-            icon: Icon(_follow ? Icons.swap_vert : Icons.swap_vert_outlined),
-            color: _follow ? Theme.of(context).colorScheme.primary : null,
-            onPressed: _toggleFollow,
-          ),
-          IconButton(
-            tooltip: 'Сохранить',
-            icon: const Icon(Icons.save_outlined),
-            onPressed: () {
-              _persist();
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                    content: Text('Сохранено'),
-                    duration: Duration(seconds: 1)),
-              );
-            },
-          ),
-          IconButton(
-            tooltip: 'Экспорт в PDF',
-            icon: const Icon(Icons.picture_as_pdf_outlined),
-            onPressed: _exportPdf,
-          ),
-        ],
+        // Действия редко-используемые (экспорт, параметры, темп, …) собраны в
+        // нижнем листе «Ещё» (кнопка ⋯ в транспорте), а не в AppBar —
+        // рабочая зона остаётся под большим пальцем. Сохранение автоматическое
+        // (каждый _commit вызывает _persist), отдельная кнопка не нужна.
       ),
       body: Column(
         children: [
@@ -567,25 +692,20 @@ class _EditorScreenState extends State<EditorScreen> {
             onRest: () => _insertNote(keys: const [], rest: true),
             onDelete: _deleteAtCursor,
             onMoveNote: _moveNote,
-            onMoveMeasure: (d) => _commit(() => _moveMeasure(d, toStart: true)),
-            onAddMeasure: _addMeasure,
             onSwitchVoice: _switchVoice,
           ),
         ],
       ),
       bottomNavigationBar: _PlaybackBar(
-        tempo: score.tempo.toDouble(),
+        tempo: score.tempo,
         isPlaying: _isPlaying,
         metronomeOn: _metronome,
-        showSustain: score.instrument == InstrumentType.piano,
-        sustainOn: _sustain,
-        onTempo: (v) {
-          _commit(() => score.tempo = v.round());
-          if (_isPlaying) _sendPlayback('PLAY');
-        },
+        followOn: _follow,
         onTogglePlay: _togglePlay,
         onToggleMetronome: _toggleMetronome,
-        onToggleSustain: _toggleSustain,
+        onToggleFollow: _toggleFollow,
+        onTempoTap: _showMoreSheet,
+        onOpenMore: _showMoreSheet,
       ),
     );
   }
@@ -609,8 +729,6 @@ class _EditorPanel extends StatelessWidget {
   final VoidCallback onRest;
   final VoidCallback onDelete;
   final ValueChanged<int> onMoveNote;
-  final ValueChanged<int> onMoveMeasure;
-  final VoidCallback onAddMeasure;
   final ValueChanged<String> onSwitchVoice;
 
   const _EditorPanel({
@@ -628,8 +746,6 @@ class _EditorPanel extends StatelessWidget {
     required this.onRest,
     required this.onDelete,
     required this.onMoveNote,
-    required this.onMoveMeasure,
-    required this.onAddMeasure,
     required this.onSwitchVoice,
   });
 
@@ -646,27 +762,21 @@ class _EditorPanel extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _topRow(context),
+              _durationRow(context), // Зона 1 — длительности
+              const SizedBox(height: 6),
+              _fillBar(context), // индикатор заполнения такта (оба инструмента)
+              const SizedBox(height: 6),
+              _editStrip(context), // Зона 2 — редактирование + аккорд-режим
               const SizedBox(height: 8),
-              _durationRow(context),
-              const SizedBox(height: 10),
+              // Зона 3 — ввод высоты/инструмента (вся ширина, зона большого пальца)
               SizedBox(
                 height: _isDrums ? 76 : 104,
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Expanded(
-                      child: _isDrums
-                          ? _DrumPad(onInsert: onInsert)
-                          : PianoKeyboard(
-                              focusOctave: cursor.voice == 'bass' ? 3 : 4,
-                              onInsert: onInsert,
-                            ),
-                    ),
-                    const SizedBox(width: 8),
-                    _sideActions(context),
-                  ],
-                ),
+                child: _isDrums
+                    ? _DrumPad(onInsert: onInsert)
+                    : PianoKeyboard(
+                        focusOctave: cursor.voice == 'bass' ? 3 : 4,
+                        onInsert: onInsert,
+                      ),
               ),
             ],
           ),
@@ -675,13 +785,87 @@ class _EditorPanel extends StatelessWidget {
     );
   }
 
-  Widget _topRow(BuildContext context) {
-    final overfull = filledBeats > totalBeats + 1e-6;
-    final color = overfull
-        ? Theme.of(context).colorScheme.error
-        : Theme.of(context).colorScheme.onSurfaceVariant;
-    final beatsText = _trim(filledBeats);
+  // --- Зона 1: длительности ---------------------------------------------
+  // Равные сегменты во всю ширину (без горизонтального скролла) + тумблер
+  // точки. Самое частое действие — крупные равные цели, всё видно сразу.
+  Widget _durationRow(BuildContext context) {
+    return Row(
+      children: [
+        for (final e in durations.entries)
+          _durSeg(context,
+              label: e.value,
+              selected: duration == e.key,
+              onTap: () => onDuration(e.key)),
+        _durSeg(context,
+            label: '♩.',
+            selected: dots > 0,
+            tooltip: 'Нота с точкой',
+            onTap: () => onDots(dots > 0 ? 0 : 1)),
+      ],
+    );
+  }
 
+  Widget _durSeg(BuildContext context,
+      {required String label,
+      required bool selected,
+      required VoidCallback onTap,
+      String? tooltip}) {
+    final scheme = Theme.of(context).colorScheme;
+    Widget seg = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: Material(
+        color: selected
+            ? scheme.secondaryContainer
+            : scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: onTap,
+          child: SizedBox(
+            height: 46,
+            child: Center(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(label,
+                    style: TextStyle(
+                        fontSize: 22,
+                        color: selected
+                            ? scheme.onSecondaryContainer
+                            : scheme.onSurfaceVariant)),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    if (tooltip != null) seg = Tooltip(message: tooltip, child: seg);
+    return Expanded(child: seg);
+  }
+
+  // Тонкий индикатор заполнения активного такта (заменяет прежний текстовый
+  // счётчик долей и работает для обоих инструментов). Переполнение — красным.
+  Widget _fillBar(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final overfull = filledBeats > totalBeats + 1e-6;
+    final value =
+        totalBeats > 0 ? (filledBeats / totalBeats).clamp(0.0, 1.0) : 0.0;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(2),
+      child: LinearProgressIndicator(
+        value: value.toDouble(),
+        minHeight: 3,
+        backgroundColor: scheme.surfaceContainerHighest,
+        color: overfull ? scheme.error : scheme.primary,
+      ),
+    );
+  }
+
+  // --- Зона 2: редактирование + режимы ----------------------------------
+  // Слева — голос (фортепиано) и курсор ◀▶ (на границе такта он сам переходит
+  // в соседний, поэтому отдельных «прыжков по тактам» нет); по центру — номер
+  // такта; справа — аккорд-режим, пауза, удаление.
+  Widget _editStrip(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Row(
       children: [
         if (!_isDrums)
@@ -694,192 +878,60 @@ class _EditorPanel extends StatelessWidget {
             selected: {cursor.voice},
             onSelectionChanged: (s) => onSwitchVoice(s.first),
           ),
-        // Счётчик такта/долей показываем только у ударных: на клавишной
-        // строку занимает переключатель ключей, и счётчик в неё не помещается.
-        if (_isDrums)
-          Expanded(
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text('Такт ${cursor.measure + 1}/${score.measures.length}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.labelMedium),
-                  Text('доли $beatsText/$totalBeats',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context)
-                          .textTheme
-                          .labelSmall
-                          ?.copyWith(color: color)),
-                ],
-              ),
-            ),
-          )
-        else
-          const Spacer(),
-        _navButton(
-            tooltip: 'Предыдущий такт',
-            icon: Icons.first_page,
-            onPressed: () => onMoveMeasure(-1)),
-        _navButton(
-            icon: Icons.chevron_left, onPressed: () => onMoveNote(-1)),
-        _navButton(
-            icon: Icons.chevron_right, onPressed: () => onMoveNote(1)),
-        _navButton(
-            tooltip: 'Следующий такт',
-            icon: Icons.last_page,
-            onPressed: () => onMoveMeasure(1)),
-        _navButton(
-          tooltip: 'Добавить такт',
-          icon: Icons.playlist_add,
-          onPressed: onAddMeasure,
+        IconButton(
+          tooltip: 'Назад',
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.chevron_left),
+          onPressed: () => onMoveNote(-1),
         ),
-      ],
-    );
-  }
-
-  /// Компактная кнопка навигации: уменьшенные отступы, чтобы пять кнопок
-  /// вместе со счётчиком тактов помещались в строку на узких экранах.
-  Widget _navButton({
-    String? tooltip,
-    required IconData icon,
-    required VoidCallback onPressed,
-  }) {
-    return IconButton(
-      tooltip: tooltip,
-      icon: Icon(icon),
-      onPressed: onPressed,
-      iconSize: 22,
-      visualDensity: VisualDensity.compact,
-      padding: EdgeInsets.zero,
-      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-    );
-  }
-
-  Widget _durationRow(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Row(
-      children: [
-        // Длительности + пунктир — горизонтальный скролл (могут не влезть).
+        IconButton(
+          tooltip: 'Вперёд',
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.chevron_right),
+          onPressed: () => onMoveNote(1),
+        ),
         Expanded(
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                for (final e in durations.entries)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 3),
-                    child: ChoiceChip(
-                      label: Text(e.value, style: const TextStyle(fontSize: 22)),
-                      labelPadding: const EdgeInsets.symmetric(horizontal: 10),
-                      selected: duration == e.key,
-                      onSelected: (_) => onDuration(e.key),
-                    ),
-                  ),
-                // Тумблер пунктира: применяется к следующему вводимому слоту.
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 3),
-                  child: ChoiceChip(
-                    label: const Text('♩.', style: TextStyle(fontSize: 20)),
-                    labelPadding: const EdgeInsets.symmetric(horizontal: 10),
-                    tooltip: 'Нота с точкой',
-                    selected: dots > 0,
-                    onSelected: (_) => onDots(dots > 0 ? 0 : 1),
-                  ),
-                ),
-              ],
+          child: Center(
+            child: Text(
+              'Такт ${cursor.measure + 1}/${score.measures.length}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelMedium,
             ),
           ),
         ),
-        const SizedBox(width: 6),
-        // Аккорд-режим: закреплён вне скролла — постоянный индикатор режима
-        // ввода (выкл = быстрый набор; вкл = ноты складываются в созвучие).
-        ChoiceChip(
-          avatar: Icon(Icons.layers,
-              size: 18, color: stackMode ? scheme.onSecondaryContainer : null),
-          label: const Text('Аккорд'),
-          tooltip: stackMode
-              ? 'Аккорд-режим включён: ноты складываются в одно созвучие'
-              : 'Аккорд-режим: складывать ноты в одно созвучие',
-          selected: stackMode,
-          selectedColor: scheme.secondaryContainer,
-          onSelected: (_) => onToggleStack(),
+        // Аккорд-режим: залитый фон при активности — постоянный индикатор.
+        IconButton(
+          tooltip: stackMode ? 'Аккорд-режим включён' : 'Аккорд-режим',
+          isSelected: stackMode,
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.layers_outlined),
+          selectedIcon: const Icon(Icons.layers),
+          style: IconButton.styleFrom(
+            backgroundColor: stackMode ? scheme.secondaryContainer : null,
+            foregroundColor: stackMode ? scheme.onSecondaryContainer : null,
+          ),
+          onPressed: onToggleStack,
+        ),
+        const SizedBox(width: 2),
+        IconButton.filledTonal(
+          tooltip: 'Пауза',
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.music_off),
+          onPressed: onRest,
+        ),
+        const SizedBox(width: 2),
+        IconButton.filledTonal(
+          tooltip: 'Стереть',
+          visualDensity: VisualDensity.compact,
+          icon: const Icon(Icons.backspace_outlined),
+          style: IconButton.styleFrom(
+            backgroundColor: scheme.errorContainer,
+            foregroundColor: scheme.onErrorContainer,
+          ),
+          onPressed: onDelete,
         ),
       ],
-    );
-  }
-
-  Widget _sideActions(BuildContext context) {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Expanded(
-          child: _ActionButton(
-            icon: Icons.music_off,
-            label: 'Пауза',
-            onTap: onRest,
-            color: Theme.of(context).colorScheme.secondaryContainer,
-          ),
-        ),
-        const SizedBox(height: 6),
-        Expanded(
-          child: _ActionButton(
-            icon: Icons.backspace_outlined,
-            label: 'Стереть',
-            onTap: onDelete,
-            color: Theme.of(context).colorScheme.errorContainer,
-          ),
-        ),
-      ],
-    );
-  }
-
-  static String _trim(double v) {
-    if ((v - v.roundToDouble()).abs() < 1e-6) return v.round().toString();
-    return v.toStringAsFixed(2).replaceFirst(RegExp(r'0+$'), '');
-  }
-}
-
-class _ActionButton extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-  final Color color;
-  const _ActionButton({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: color,
-      borderRadius: BorderRadius.circular(10),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(10),
-        onTap: onTap,
-        child: Container(
-          width: 78,
-          alignment: Alignment.center,
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          // FittedBox гарантирует, что контент не переполнит слот любой высоты.
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(icon, size: 20),
-                const SizedBox(height: 2),
-                Text(label, style: const TextStyle(fontSize: 11)),
-              ],
-            ),
-          ),
-        ),
-      ),
     );
   }
 }
@@ -1074,68 +1126,73 @@ class _DrumPad extends StatelessWidget {
 // =====================================================================
 //  Нижняя панель плеера
 // =====================================================================
+// Слим-транспорт (Зона 4): play/pause + метроном + follow + темп-чип (тап →
+// лист «Ещё» с точным темпом) + ⋯ (лист «Ещё» с редкими действиями). Слайдер
+// темпа и нишевые тумблеры из постоянной строки убраны — они в листе «Ещё».
 class _PlaybackBar extends StatelessWidget {
-  final double tempo;
+  final int tempo;
   final bool isPlaying;
   final bool metronomeOn;
-  final bool showSustain;
-  final bool sustainOn;
-  final ValueChanged<double> onTempo;
+  final bool followOn;
   final VoidCallback onTogglePlay;
   final VoidCallback onToggleMetronome;
-  final VoidCallback onToggleSustain;
+  final VoidCallback onToggleFollow;
+  final VoidCallback onTempoTap;
+  final VoidCallback onOpenMore;
 
   const _PlaybackBar({
     required this.tempo,
     required this.isPlaying,
     required this.metronomeOn,
-    required this.showSustain,
-    required this.sustainOn,
-    required this.onTempo,
+    required this.followOn,
     required this.onTogglePlay,
     required this.onToggleMetronome,
-    required this.onToggleSustain,
+    required this.onToggleFollow,
+    required this.onTempoTap,
+    required this.onOpenMore,
   });
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return BottomAppBar(
+      height: 60,
+      padding: const EdgeInsets.symmetric(horizontal: 8),
       child: Row(
         children: [
+          FloatingActionButton.small(
+            elevation: 0,
+            onPressed: onTogglePlay,
+            child: Icon(isPlaying ? Icons.pause : Icons.play_arrow),
+          ),
           IconButton(
             tooltip: 'Метроном',
             isSelected: metronomeOn,
             icon: const Icon(Icons.av_timer),
-            color: metronomeOn ? Theme.of(context).colorScheme.primary : null,
+            color: metronomeOn ? scheme.primary : null,
             onPressed: onToggleMetronome,
           ),
-          if (showSustain)
-            IconButton(
-              tooltip: 'Демпфер-педаль (sustain)',
-              isSelected: sustainOn,
-              icon: const Icon(Icons.commit), // символ удержания/педали
-              color: sustainOn ? Theme.of(context).colorScheme.primary : null,
-              onPressed: onToggleSustain,
-            ),
-          const Icon(Icons.speed, size: 20),
-          Expanded(
-            child: Slider(
-              value: tempo,
-              min: 40,
-              max: 240,
-              divisions: 200,
-              label: '${tempo.round()} BPM',
-              onChanged: onTempo,
-            ),
+          IconButton(
+            tooltip: followOn
+                ? 'Следовать за воспроизведением: вкл.'
+                : 'Следовать за воспроизведением: выкл.',
+            isSelected: followOn,
+            icon: Icon(followOn ? Icons.swap_vert : Icons.swap_vert_outlined),
+            color: followOn ? scheme.primary : null,
+            onPressed: onToggleFollow,
           ),
-          Text('${tempo.round()}',
-              style: const TextStyle(fontWeight: FontWeight.bold)),
-          const SizedBox(width: 8),
-          FloatingActionButton.small(
-            onPressed: onTogglePlay,
-            child: Icon(isPlaying ? Icons.pause : Icons.play_arrow),
+          const Spacer(),
+          // Темп — компактный чип-читалка; тап открывает лист «Ещё» (слайдер).
+          ActionChip(
+            avatar: const Icon(Icons.speed, size: 18),
+            label: Text('♩=$tempo'),
+            onPressed: onTempoTap,
           ),
-          const SizedBox(width: 8),
+          IconButton(
+            tooltip: 'Ещё',
+            icon: const Icon(Icons.more_horiz),
+            onPressed: onOpenMore,
+          ),
         ],
       ),
     );
