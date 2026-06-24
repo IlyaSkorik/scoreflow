@@ -64,12 +64,28 @@ class TimeSignature {
 /// [auto] — служебный флаг: пауза, автоматически добитая для целостности
 ///          такта (см. fillRests/normalize). НЕ сериализуется — добивка
 ///          пересчитывается при каждой нормализации, поэтому не накапливается.
+///
+/// Лиги — два МУЗЫКАЛЬНО РАЗНЫХ объекта, представленных РАЗДЕЛЬНЫМИ
+/// независимыми полями (никогда не делящими одно поле — см. модель MusicXML
+/// `<tie>` vs `<slur>`):
+/// [tieToNext] — Tie (лига ДЛИТЕЛЬНОСТИ): эта нота связана со следующей
+///          реальной нотой того же голоса в одну звучащую — один attack,
+///          суммарная длительность. Флаг на ноте-источнике; цепочка a–a–a =
+///          подряд идущие tieToNext. Может пересекать границу такта (флаг едет
+///          вместе с объектом при reflow). Влияет на playback/рендер/PDF.
+/// [slurStart]/[slurStop] — Slur (лига ФРАЗИРОВКИ): legato-дуга над диапазоном
+///          нот любой высоты. Маркеры на нотах-концах; промежуточные ноты
+///          попадают под дугу. НЕ объединяет ни длительности, ни звуки
+///          (на playback не влияет — только рендер/модель/PDF).
 class MusicNote {
   List<String> keys;
   String duration;
   int dots;
   bool rest;
   bool auto;
+  bool tieToNext;
+  bool slurStart;
+  bool slurStop;
 
   MusicNote({
     required this.keys,
@@ -77,6 +93,9 @@ class MusicNote {
     this.dots = 0,
     this.rest = false,
     this.auto = false,
+    this.tieToNext = false,
+    this.slurStart = false,
+    this.slurStop = false,
   });
 
   MusicNote copy() => MusicNote(
@@ -85,6 +104,9 @@ class MusicNote {
         dots: dots,
         rest: rest,
         auto: auto,
+        tieToNext: tieToNext,
+        slurStart: slurStart,
+        slurStop: slurStop,
       );
 
   Map<String, dynamic> toJson() => {
@@ -92,6 +114,10 @@ class MusicNote {
         'duration': duration,
         if (dots > 0) 'dots': dots,
         'rest': rest,
+        // Лиги сериализуются только когда выставлены — JSON остаётся лаконичным.
+        if (tieToNext) 'tieToNext': true,
+        if (slurStart) 'slurStart': true,
+        if (slurStop) 'slurStop': true,
       };
 
   factory MusicNote.fromJson(Map<String, dynamic> j) => MusicNote(
@@ -99,6 +125,9 @@ class MusicNote {
         duration: j['duration'] as String,
         dots: j['dots'] as int? ?? 0,
         rest: j['rest'] as bool? ?? false,
+        tieToNext: j['tieToNext'] as bool? ?? false,
+        slurStart: j['slurStart'] as bool? ?? false,
+        slurStop: j['slurStop'] as bool? ?? false,
       );
 }
 
@@ -232,8 +261,10 @@ class Score {
       Score.fromJson(jsonDecode(raw) as Map<String, dynamic>);
 
   /// Полезная нагрузка для рендер-движка (VexFlow). Содержит позицию курсора,
-  /// чтобы движок подсветил активную ноту.
-  String renderPayload(EditorCursor cursor) => jsonEncode({
+  /// чтобы движок подсветил активную ноту. [selection] (опц.) — диапазон нот
+  /// одного голоса для подсветки выделения при наборе лиги фразировки (slur).
+  String renderPayload(EditorCursor cursor, {Map<String, dynamic>? selection}) =>
+      jsonEncode({
         'title': title,
         'composer': composer,
         'instrument': instrument.id,
@@ -242,6 +273,7 @@ class Score {
         'tempo': tempo,
         'measures': measures.map((m) => m.toJson()).toList(),
         'cursor': cursor.toJson(),
+        if (selection != null) 'selection': selection,
       });
 }
 

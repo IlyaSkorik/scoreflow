@@ -48,6 +48,14 @@
             border-radius: 3px;
             pointer-events: none;
         }
+        /* Подсветка выделения при наборе лиги фразировки (slur). Иной цвет,
+           чтобы отличать от синей подсветки звучащих нот при playback. */
+        .note-sel {
+            position: absolute;
+            background: rgba(76, 175, 80, 0.28);
+            border-radius: 3px;
+            pointer-events: none;
+        }
         #engine-error {
             padding: 16px;
             color: #c62828;
@@ -105,6 +113,8 @@
         let lastLayout = null;    // геометрия последней раскладки (для экспорта)
         let noteHits = [];        // bounding box'ы нот для тап-навигации
         let noteHitIndex = {};    // noteId ("m:v:i") -> bbox (playhead/подсветка)
+        let noteObjs = {};        // noteId -> VF.StaveNote (для отрисовки лиг Tie/Slur)
+        let noteTransform = {};   // noteId -> {tx, sx} горизонт. сжатие такта (для лиг)
         let tapAttached = false;
 
         function el(id) { return document.getElementById(id); }
@@ -146,6 +156,7 @@
                     keys: [REST_KEY[clef]], duration: 'wr', clef: clef,
                 });
                 placeholder.__hit = { m: measureIndex, v: voiceId, i: -1 };
+                placeholder.__note = null;
                 tickables.push(placeholder);
             } else {
                 notes.forEach((n, i) => {
@@ -172,6 +183,7 @@
                         sn.setStyle({ fillStyle: '#2196F3', strokeStyle: '#2196F3' });
                     }
                     sn.__hit = { m: measureIndex, v: voiceId, i: i };
+                    sn.__note = n; // доступ к флагам лиг (tieToNext/slurStart/slurStop)
                     tickables.push(sn);
                 });
             }
@@ -196,6 +208,8 @@
             const prevScrollY = window.scrollY || document.documentElement.scrollTop || 0;
             clearCanvas();
             noteHits = [];
+            noteObjs = {};
+            noteTransform = {};
 
             const container = el('notation-container');
             const width = forcedWidth || Math.max(320, container.clientWidth);
@@ -349,11 +363,18 @@
                 }
             }
 
+            // Лиги Tie/Slur — отдельным проходом ПОСЛЕ нот (позиции готовы).
+            try { drawTiesAndSlurs(VF, ctx, score, geom); }
+            catch (err) { console.error('drawTiesAndSlurs failed:', err); }
+
             // индекс координат нот по noteId — для note-synced playhead/подсветки
             noteHitIndex = {};
             for (let h = 0; h < noteHits.length; h++) {
                 noteHitIndex[noteHits[h].id] = noteHits[h];
             }
+
+            // Подсветка выделения при наборе лиги фразировки (slur).
+            drawSelectionHighlight(score.selection);
 
             // геометрия раскладки — нужна плееру и автоскроллу.
             // geom[i] = {row, x, w}: число тактов в строке переменное, поэтому
@@ -466,11 +487,23 @@
                     try { bb = t.getBoundingBox(); } catch (e) { return; }
                     if (!bb) return;
                     const hx = startX + (bb.getX() - startX) * sx;
+                    const id = t.__hit.m + ':' + t.__hit.v + ':' + t.__hit.i;
                     noteHits.push({
-                        id: t.__hit.m + ':' + t.__hit.v + ':' + t.__hit.i,
+                        id: id,
                         m: t.__hit.m, v: t.__hit.v, i: t.__hit.i,
                         x: hx, y: bb.getY(), w: bb.getW() * sx, h: bb.getH(),
                     });
+                    // Реестр объектов нот — нужен отрисовке лиг (Tie/Slur) после
+                    // того, как все строки нарисованы и позиции финализированы.
+                    // Вместе с трансформом сжатия такта (sx<1): ноты рисуются в
+                    // <g scale>, и лигу нужно рисовать в ТОМ ЖЕ трансформе, иначе
+                    // она уезжает по несжатым координатам (за край строки).
+                    if (t.__hit.i >= 0) {
+                        noteObjs[id] = t;
+                        noteTransform[id] = sx < 1
+                            ? { tx: startX * (1 - sx), sx: sx }
+                            : { tx: 0, sx: 1 };
+                    }
                 });
             });
 
@@ -479,6 +512,200 @@
                 grp.setAttribute('transform',
                     'translate(' + (startX * (1 - sx)) + ',0) scale(' + sx + ',1)');
             }
+        }
+
+        // =================================================================
+        //  Отрисовка лиг: Tie (длительность) и Slur (фразировка)
+        //  Два МУЗЫКАЛЬНО РАЗНЫХ объекта рисуются раздельно:
+        //   - Tie  -> VF.StaveTie между нотой и следующей того же голоса/высоты;
+        //   - Slur -> VF.Curve над диапазоном (маркеры slurStart/slurStop).
+        //  Проход идёт ПОСЛЕ отрисовки всех нот (нужны финальные позиции).
+        //  Известное ограничение: в тактах со сжатием (sx<1 в formatAndDraw,
+        //  редкий overflow) дуга может слегка не совпасть — координаты нот
+        //  доскейловые. Приемлемо для первого этапа.
+        // =================================================================
+
+        function sameKeys(a, b) {
+            if (!a || !b || a.length !== b.length) return false;
+            for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+            return true;
+        }
+
+        // Следующая РЕАЛЬНАЯ нота того же голоса после (mi, ni): сначала в этом
+        // такте, иначе первая в последующих тактах. Авто-паузы добивки в payload
+        // не приходят отдельным флагом, но у них keys=[] и rest=true — здесь нас
+        // интересует именно следующий слот, валидность проверяет вызывающий.
+        function nextRealNote(measures, voiceId, mi, ni) {
+            const here = (measures[mi] && measures[mi][voiceId]) || [];
+            if (ni + 1 < here.length) {
+                return { mi: mi, ni: ni + 1, note: here[ni + 1] };
+            }
+            for (let m = mi + 1; m < measures.length; m++) {
+                const notes = (measures[m] && measures[m][voiceId]) || [];
+                if (notes.length > 0) return { mi: m, ni: 0, note: notes[0] };
+            }
+            return null;
+        }
+
+        function voiceListOf(score) {
+            return score.instrument === 'drums' ? ['perc'] : ['treble', 'bass'];
+        }
+
+        // Рисует [fn] внутри того же горизонтального трансформа сжатия [tr],
+        // что и ноты такта (translate+scaleX). Иначе лига считалась бы по
+        // несжатым координатам и уезжала за пределы такта/строки. tr.sx==1 —
+        // трансформа нет (обычный такт), рисуем как есть.
+        function withTransform(ctx, tr, fn) {
+            if (tr && tr.sx < 1 && ctx.openGroup) {
+                ctx.openGroup('liga');
+                const g = ctx.parent; // openGroup выставляет parent = новый <g>
+                fn();
+                ctx.closeGroup();
+                if (g && g.setAttribute) {
+                    g.setAttribute('transform',
+                        'translate(' + tr.tx + ',0) scale(' + tr.sx + ',1)');
+                }
+            } else {
+                fn();
+            }
+        }
+
+        function sameTr(a, b) {
+            return a && b && a.sx === b.sx && a.tx === b.tx;
+        }
+
+        // Лига длительности. Внутри одного такта — целая (в его трансформе).
+        // Соседние такты одной строки — целая (трансформ лишь если у обоих
+        // одинаковый). Через перенос строки — две частичные, КАЖДАЯ в трансформе
+        // своего такта (иначе хвост у сжатого такта уедет за край строки).
+        function drawTie(VF, ctx, a, mA, rowA, trA, b, mB, rowB, trB, idx) {
+            const full = function (tr) {
+                withTransform(ctx, tr, function () {
+                    new VF.StaveTie({ first_note: a, last_note: b,
+                        first_indices: idx, last_indices: idx })
+                        .setContext(ctx).draw();
+                });
+            };
+            try {
+                if (mA === mB) {
+                    full(trA);
+                } else if (rowA === rowB) {
+                    full(sameTr(trA, trB) ? trA : null);
+                } else {
+                    withTransform(ctx, trA, function () {
+                        new VF.StaveTie({ first_note: a, last_note: null,
+                            first_indices: idx, last_indices: idx })
+                            .setContext(ctx).draw();
+                    });
+                    withTransform(ctx, trB, function () {
+                        new VF.StaveTie({ first_note: null, last_note: b,
+                            first_indices: idx, last_indices: idx })
+                            .setContext(ctx).draw();
+                    });
+                }
+            } catch (e) { console.error('tie draw failed:', e); }
+        }
+
+        function drawSlur(VF, ctx, a, mA, rowA, trA, b, mB, rowB, trB) {
+            try {
+                if (rowA === rowB) {
+                    const tr = (mA === mB) ? trA : (sameTr(trA, trB) ? trA : null);
+                    withTransform(ctx, tr, function () {
+                        new VF.Curve(a, b, {}).setContext(ctx).draw();
+                    });
+                } else {
+                    // Через перенос строки — частичные дуги по сегментам
+                    // (best-effort), каждая в трансформе своего такта.
+                    try { withTransform(ctx, trA, function () {
+                        new VF.Curve(a, null, {}).setContext(ctx).draw(); }); }
+                    catch (e1) { /* нет правой границы — пропуск */ }
+                    try { withTransform(ctx, trB, function () {
+                        new VF.Curve(null, b, {}).setContext(ctx).draw(); }); }
+                    catch (e2) { /* нет левой границы — пропуск */ }
+                }
+            } catch (e) { console.error('slur draw failed:', e); }
+        }
+
+        // [geom] -> строка такта (row); [noteObjs]/[noteTransform] -> объект и
+        // трансформ сжатия ноты по noteId.
+        function drawTiesAndSlurs(VF, ctx, score, geom) {
+            const measures = score.measures || [];
+            const voices = voiceListOf(score);
+            const rowOf = function (mi) { return geom[mi] ? geom[mi].row : 0; };
+            const idOf = function (mi, v, ni) { return mi + ':' + v + ':' + ni; };
+
+            // --- Tie: попарная связь note -> следующая нота той же высоты ---
+            for (let vi = 0; vi < voices.length; vi++) {
+                const v = voices[vi];
+                for (let mi = 0; mi < measures.length; mi++) {
+                    const notes = (measures[mi] && measures[mi][v]) || [];
+                    for (let ni = 0; ni < notes.length; ni++) {
+                        const n = notes[ni];
+                        if (!n || !n.tieToNext || n.rest) continue;
+                        const p = nextRealNote(measures, v, mi, ni);
+                        // Лига длительности валидна лишь между нотами одной высоты.
+                        if (!p || p.note.rest || !sameKeys(n.keys, p.note.keys)) continue;
+                        const idA = idOf(mi, v, ni), idB = idOf(p.mi, v, p.ni);
+                        const a = noteObjs[idA], b = noteObjs[idB];
+                        if (!a || !b) continue;
+                        const idx = n.keys.map(function (_, k) { return k; });
+                        drawTie(VF, ctx, a, mi, rowOf(mi), noteTransform[idA],
+                            b, p.mi, rowOf(p.mi), noteTransform[idB], idx);
+                    }
+                }
+            }
+
+            // --- Slur: стек start/stop в пределах голоса по порядку ---
+            for (let vi = 0; vi < voices.length; vi++) {
+                const v = voices[vi];
+                const stack = [];
+                for (let mi = 0; mi < measures.length; mi++) {
+                    const notes = (measures[mi] && measures[mi][v]) || [];
+                    for (let ni = 0; ni < notes.length; ni++) {
+                        const n = notes[ni];
+                        if (!n) continue;
+                        if (n.slurStart) stack.push({ mi: mi, ni: ni });
+                        if (n.slurStop && stack.length > 0) {
+                            const s = stack.pop();
+                            const idA = idOf(s.mi, v, s.ni), idB = idOf(mi, v, ni);
+                            const a = noteObjs[idA], b = noteObjs[idB];
+                            if (a && b) drawSlur(VF, ctx, a, s.mi, rowOf(s.mi),
+                                noteTransform[idA], b, mi, rowOf(mi), noteTransform[idB]);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Подсветка выделенного диапазона нот при наборе лиги фразировки.
+        // [sel] = { voice, m0, i0, m1, i1 } или отсутствует. Заливка иного цвета
+        // (см. .note-sel) поверх SVG, поверх слоя нот, не перехватывает клики.
+        function drawSelectionHighlight(sel) {
+            const old = el('sel-highlights');
+            if (old) old.remove();
+            if (!sel) return;
+            const layer = document.createElement('div');
+            layer.id = 'sel-highlights';
+            layer.style.position = 'absolute';
+            layer.style.left = '0';
+            layer.style.top = '0';
+            layer.style.pointerEvents = 'none';
+            const lo = sel.m0 * 100000 + sel.i0;
+            const hi = sel.m1 * 100000 + sel.i1;
+            for (let h = 0; h < noteHits.length; h++) {
+                const hh = noteHits[h];
+                if (hh.v !== sel.voice || hh.i < 0) continue;
+                const rank = hh.m * 100000 + hh.i;
+                if (rank < lo || rank > hi) continue;
+                const d = document.createElement('div');
+                d.className = 'note-sel';
+                d.style.left = (PAD + hh.x - 3) + 'px';
+                d.style.top = (PAD + hh.y - 3) + 'px';
+                d.style.width = (hh.w + 6) + 'px';
+                d.style.height = (hh.h + 6) + 'px';
+                layer.appendChild(d);
+            }
+            el('notation-container').appendChild(layer);
         }
 
         // Тап по партитуре -> ближайшая нота -> курсор во Flutter.
@@ -590,6 +817,38 @@
             return DRUM_FULL[full] || DRUM_BASE[p[0] + '/' + p[1]] || 'snare';
         }
 
+        // Tie-merge для playback: внутри каждого голоса (события уже в порядке
+        // времени) поглощаем цепочку лиг длительности в одно событие — один
+        // attack, суммарная длительность. Поглощённые ноты переходят в
+        // coveredNoteIds головного события (для подсветки всей цепочки).
+        // Лига валидна лишь между нотами одной высоты, не паузами.
+        function mergeTies(events) {
+            const byVoice = {};
+            for (let i = 0; i < events.length; i++) {
+                const e = events[i];
+                (byVoice[e.voiceId] || (byVoice[e.voiceId] = [])).push(e);
+            }
+            const out = [];
+            for (const v in byVoice) {
+                const list = byVoice[v];
+                let k = 0;
+                while (k < list.length) {
+                    const head = list[k];
+                    let j = k;
+                    while (list[j].tieToNext && !list[j].rest && j + 1 < list.length) {
+                        const nxt = list[j + 1];
+                        if (nxt.rest || !sameKeys(head.keys, nxt.keys)) break;
+                        head.durationBeats += nxt.durationBeats;
+                        head.coveredNoteIds.push(nxt.noteId);
+                        j++;
+                    }
+                    out.push(head);
+                    k = j + 1;
+                }
+            }
+            return out;
+        }
+
         // --- Playback Compiler ---------------------------------------------
         // Событие: { noteId, startBeat, durationBeats, keys, voiceId, rest }.
         // Биты — в четвертях. Старт каждого такта привязан к его индексу
@@ -603,7 +862,7 @@
             const voiceIds = isDrums ? ['perc'] : ['treble', 'bass'];
             const measures = payload.measures || [];
             const measureQ = beats * (4 / beatValue); // длина такта в четвертях
-            const events = [];
+            let events = [];
 
             for (let mi = 0; mi < measures.length; mi++) {
                 const base = mi * measureQ;
@@ -626,6 +885,10 @@
                             keys: n.keys || [],
                             voiceId: v,
                             rest: !!n.rest,
+                            // Tie (лига длительности): объединяется в одно
+                            // звучащее событие на merge-проходе ниже.
+                            tieToNext: !!n.tieToNext,
+                            coveredNoteIds: [], // ноты-продолжения цепочки лиг
                             // Громкость ноты (0..1). Сейчас по умолчанию mf;
                             // позже сюда проецируются динамические оттенки.
                             velocity: n.velocity != null ? n.velocity : 0.78,
@@ -634,6 +897,10 @@
                     }
                 }
             }
+            // Tie-merge: цепочка нот одной высоты -> одно событие (один attack,
+            // суммарная длительность). Работает через границы тактов (события
+            // уже на общей beat-сетке). Slur на playback НЕ влияет.
+            events = mergeTies(events);
             events.sort(function (a, b) { return a.startBeat - b.startBeat; });
             return {
                 events: events,
@@ -1347,7 +1614,14 @@
                     const e = ev[i];
                     if (e.startBeat > curBeat) break; // отсортировано по началу
                     if (e.rest || !e.keys.length) continue;
-                    if (curBeat < e.startBeat + e.durationBeats) active[e.noteId] = true;
+                    if (curBeat < e.startBeat + e.durationBeats) {
+                        active[e.noteId] = true;
+                        // Tie: подсвечиваем все ноты цепочки, пока звучит событие.
+                        if (e.coveredNoteIds) {
+                            for (let c = 0; c < e.coveredNoteIds.length; c++)
+                                active[e.coveredNoteIds[c]] = true;
+                        }
+                    }
                 }
                 for (const id in this._hl) {
                     if (!active[id]) {
@@ -1470,9 +1744,11 @@
             ctx.restore();
         }
 
-        // Отрисовка одной системы (строки) на странице.
+        // Отрисовка одной системы (строки) на странице. [sysIndex] — сквозной
+        // номер системы, [registry] — реестр noteId -> {sn, ctx, sys} для
+        // последующего прохода лиг (Tie/Slur), общий на всю печать.
         function drawSystem(VF, ctx, sys, measures, cfg, yTop, beats, beatValue,
-                            keySig, timeSig) {
+                            keySig, timeSig, sysIndex, registry) {
             let x = PAGE.mx;
             sys.items.forEach(function (idx, pos) {
                 const isFirst = (pos === 0);
@@ -1481,9 +1757,10 @@
                 const staveW = (isFirst ? sys.L : 0) + content;
 
                 // Свежие голоса под отрисовку (ноты нельзя переиспользовать).
+                // measureIndex = idx — нужен реестру лиг (noteId "m:v:i").
                 const voices = cfg.staves.map(function (st) {
                     return buildVoice(VF, measures[idx][st.voice] || [], st.clef,
-                        beats, beatValue, -1, -1, st.voice);
+                        beats, beatValue, -1, idx, st.voice);
                 });
 
                 // Станы такта.
@@ -1521,6 +1798,15 @@
                     });
                     v.draw(ctx, staves[si]);
                     beams.forEach(function (b) { b.setContext(ctx).draw(); });
+
+                    // Регистрируем ноты для прохода лиг (после draw — позиции готовы).
+                    if (registry) {
+                        v.getTickables().forEach(function (t) {
+                            if (!t.__hit || t.__hit.i < 0) return;
+                            registry[t.__hit.m + ':' + t.__hit.v + ':' + t.__hit.i] =
+                                { sn: t, ctx: ctx, sys: sysIndex };
+                        });
+                    }
                 });
 
                 // Системная скобка + левая линия (клавишные).
@@ -1622,6 +1908,13 @@
                 pages.push(systems.slice(s, s + perPage));
             }
 
+            // Реестр нот для прохода лиг: noteId -> {sn, ctx, sys}. Сквозной
+            // номер системы (sysGi) различает системы на одной странице (общий
+            // ctx) — лига внутри системы рисуется целиком, между системами —
+            // частичными дугами на соответствующих ctx.
+            const printObjs = {};
+            let sysGi = 0;
+
             for (let p = 0; p < pages.length; p++) {
                 const pageSystems = pages[p];
                 const ctx = (p === 0) ? ctx0 : newPage(root);
@@ -1646,12 +1939,87 @@
                 let y = PAGE.mtop + headOffset;
                 for (let k = 0; k < n; k++) {
                     drawSystem(VF, ctx, pageSystems[k], measures, cfg, y,
-                        beats, beatValue, keySig, timeSig);
+                        beats, beatValue, keySig, timeSig, sysGi, printObjs);
+                    sysGi++;
                     y += sysH + gap;
                 }
             }
 
+            // Лиги Tie/Slur — отдельным проходом после отрисовки всех страниц.
+            try { drawPrintTiesAndSlurs(VF, score, printObjs); }
+            catch (err) { console.error('drawPrintTiesAndSlurs failed:', err); }
+
             return pages.length;
+        }
+
+        // Проход лиг для печати: как drawTiesAndSlurs, но ctx у каждой ноты свой
+        // (страницы — разные SVG). Внутри одной системы — целая дуга; между
+        // системами — частичные дуги на ctx каждого конца.
+        function drawPrintTiesAndSlurs(VF, score, registry) {
+            const measures = score.measures || [];
+            const voices = voiceListOf(score);
+            const objOf = function (mi, v, ni) { return registry[mi + ':' + v + ':' + ni]; };
+
+            function tie(a, b, idx) {
+                try {
+                    if (a.sys === b.sys) {
+                        new VF.StaveTie({ first_note: a.sn, last_note: b.sn,
+                            first_indices: idx, last_indices: idx })
+                            .setContext(a.ctx).draw();
+                    } else {
+                        new VF.StaveTie({ first_note: a.sn, last_note: null,
+                            first_indices: idx, last_indices: idx })
+                            .setContext(a.ctx).draw();
+                        new VF.StaveTie({ first_note: null, last_note: b.sn,
+                            first_indices: idx, last_indices: idx })
+                            .setContext(b.ctx).draw();
+                    }
+                } catch (e) { console.error('print tie failed:', e); }
+            }
+            function slur(a, b) {
+                try {
+                    if (a.sys === b.sys) {
+                        new VF.Curve(a.sn, b.sn, {}).setContext(a.ctx).draw();
+                    } else {
+                        try { new VF.Curve(a.sn, null, {}).setContext(a.ctx).draw(); }
+                        catch (e1) { /* пропуск */ }
+                        try { new VF.Curve(null, b.sn, {}).setContext(b.ctx).draw(); }
+                        catch (e2) { /* пропуск */ }
+                    }
+                } catch (e) { console.error('print slur failed:', e); }
+            }
+
+            for (let vi = 0; vi < voices.length; vi++) {
+                const v = voices[vi];
+                for (let mi = 0; mi < measures.length; mi++) {
+                    const notes = (measures[mi] && measures[mi][v]) || [];
+                    for (let ni = 0; ni < notes.length; ni++) {
+                        const n = notes[ni];
+                        if (!n || !n.tieToNext || n.rest) continue;
+                        const p = nextRealNote(measures, v, mi, ni);
+                        if (!p || p.note.rest || !sameKeys(n.keys, p.note.keys)) continue;
+                        const a = objOf(mi, v, ni), b = objOf(p.mi, v, p.ni);
+                        if (a && b) tie(a, b, n.keys.map(function (_, k) { return k; }));
+                    }
+                }
+            }
+            for (let vi = 0; vi < voices.length; vi++) {
+                const v = voices[vi];
+                const stack = [];
+                for (let mi = 0; mi < measures.length; mi++) {
+                    const notes = (measures[mi] && measures[mi][v]) || [];
+                    for (let ni = 0; ni < notes.length; ni++) {
+                        const n = notes[ni];
+                        if (!n) continue;
+                        if (n.slurStart) stack.push({ mi: mi, ni: ni });
+                        if (n.slurStop && stack.length > 0) {
+                            const s = stack.pop();
+                            const a = objOf(s.mi, v, s.ni), b = objOf(mi, v, ni);
+                            if (a && b) slur(a, b);
+                        }
+                    }
+                }
+            }
         }
 
         // =================================================================

@@ -44,6 +44,9 @@ class _EditorScreenState extends State<EditorScreen> {
   String _duration = 'q';
   int _dots = 0; // 0 = без точки, 1 = пунктир (модель расширяема до 2–3)
   bool _stackMode = false; // Аккорд-режим: ввод наращивает созвучие, не двигая курсор
+  // Якорь набора лиги фразировки (slur): первый конец выделения. null — не
+  // активен. Не часть документа — живёт только в сессии редактирования.
+  EditorCursor? _slurAnchor;
   bool _isPlaying = false;
   bool _metronome = false;
   bool _sustain = false;
@@ -97,11 +100,32 @@ class _EditorScreenState extends State<EditorScreen> {
   // --- мост к движку ---------------------------------------------------
   void _render() {
     if (!_ready || _web == null || _score == null) return;
-    final payload = _score!.renderPayload(_cursor);
+    final payload = _score!.renderPayload(_cursor, selection: _selectionMap());
     final b64 = base64Encode(utf8.encode(payload));
     _web!.evaluateJavascript(
       source: "window.ScoreFlow && window.ScoreFlow.renderB64('$b64');",
     );
+  }
+
+  /// Диапазон выделения для подсветки набора slur: [_slurAnchor]..курсор в
+  /// одном голосе. null, если якоря нет / курсор в другом голосе / на пустом
+  /// слоте. Концы упорядочены по (такт, индекс).
+  static int _rank(int measure, int index) => measure * 100000 + index;
+
+  Map<String, dynamic>? _selectionMap() {
+    final a = _slurAnchor;
+    if (a == null || a.voice != _cursor.voice || _cursor.index < 0) return null;
+    final aR = _rank(a.measure, a.index);
+    final cR = _rank(_cursor.measure, _cursor.index);
+    final lo = aR <= cR ? a : _cursor;
+    final hi = aR <= cR ? _cursor : a;
+    return {
+      'voice': a.voice,
+      'm0': lo.measure,
+      'i0': lo.index,
+      'm1': hi.measure,
+      'i1': hi.index,
+    };
   }
 
   void _sendPlayback(String action) {
@@ -158,6 +182,7 @@ class _EditorScreenState extends State<EditorScreen> {
   void _applySnapshot(EditorSnapshot snap) {
     setState(() {
       _score = snap.score;
+      _slurAnchor = null; // позиции могли сместиться — якорь набора slur сбрасываем
       _cursor
         ..measure = snap.measure
         ..voice = snap.voice
@@ -280,7 +305,7 @@ class _EditorScreenState extends State<EditorScreen> {
         return;
       }
 
-      // 1) курсор на паузе -> заполняем её
+      // 1) курсор на паузе -> заполняем её (свежая нота без унаследованных лиг)
       if (i >= 0 && i < notes.length && notes[i].rest) {
         notes[i]
           ..keys = _sortedKeys(keys)
@@ -288,6 +313,7 @@ class _EditorScreenState extends State<EditorScreen> {
           ..duration = _duration
           ..dots = _dots
           ..auto = false;
+        _resetLigatures(notes[i]);
         return;
       }
 
@@ -300,6 +326,7 @@ class _EditorScreenState extends State<EditorScreen> {
           ..duration = _duration
           ..dots = _dots
           ..auto = false;
+        _resetLigatures(notes[next]);
         _cursor.index = next;
         return;
       }
@@ -340,6 +367,7 @@ class _EditorScreenState extends State<EditorScreen> {
       n
         ..keys = []
         ..rest = true;
+      _resetLigatures(n); // нота стёрта -> снять её лиги (как при удалении)
     } else {
       n
         ..keys = _sortedKeys(set)
@@ -349,16 +377,121 @@ class _EditorScreenState extends State<EditorScreen> {
 
   /// Удаление под курсором: нота превращается в паузу той же длительности
   /// (ритм не «съезжает»). Пауза остаётся на месте как держатель ритма —
-  /// удалять её нечего.
+  /// удалять её нечего. Лиги, относящиеся к удаляемой ноте, снимаются: пауза
+  /// не должна оставаться связанной (иначе дуга «висит» на паузе, а флаг
+  /// «оживает» при повторном вводе ноты в этот слот).
   void _deleteAtCursor() {
     final notes = _activeVoice;
     if (notes.isEmpty || _cursor.index < 0) return;
     final n = notes[_cursor.index];
     if (n.rest) return;
     _commit(() {
+      _clearLigaturesAt(_cursor.measure, _cursor.voice, _cursor.index);
       n
         ..keys = []
         ..rest = true;
+    });
+  }
+
+  /// Снимает все лиги, относящиеся к ноте (measure,voice,index): её собственные
+  /// маркеры (tie/slur) и ВХОДЯЩУЮ лигу длительности от предыдущей ноты голоса.
+  void _clearLigaturesAt(int measure, String voice, int index) {
+    final notes = _voiceOf(_score!, measure, voice);
+    if (index < 0 || index >= notes.length) return;
+    notes[index]
+      ..tieToNext = false
+      ..slurStart = false
+      ..slurStop = false;
+    _prevNoteInVoice(measure, voice, index)?.tieToNext = false;
+  }
+
+  /// Сбрасывает флаги лиг ноты (для переиспользуемого слота — напр. когда
+  /// пауза заполняется свежей нотой, она не должна унаследовать старую лигу).
+  void _resetLigatures(MusicNote n) => n
+    ..tieToNext = false
+    ..slurStart = false
+    ..slurStop = false;
+
+  /// Непосредственно предшествующая нота того же голоса (слот index-1, иначе
+  /// последняя нота ближайшего предыдущего непустого такта) или null.
+  MusicNote? _prevNoteInVoice(int measure, String voice, int index) {
+    if (index > 0) return _voiceOf(_score!, measure, voice)[index - 1];
+    for (var m = measure - 1; m >= 0; m--) {
+      final notes = _voiceOf(_score!, m, voice);
+      if (notes.isNotEmpty) return notes.last;
+    }
+    return null;
+  }
+
+  // --- Лиги ------------------------------------------------------------
+
+  /// Текущая нота пригодна как конец лиги (существует и не пауза).
+  bool get _cursorOnNote {
+    final notes = _activeVoice;
+    final i = _cursor.index;
+    return i >= 0 && i < notes.length && !notes[i].rest;
+  }
+
+  /// Tie (лига длительности): тумблер на ноте под курсором — связь со
+  /// следующей нотой того же голоса. Валидность (та же высота, без разрыва)
+  /// проверяет движок при рендере/playback; модель остаётся пермиссивной.
+  void _toggleTie() {
+    if (!_cursorOnNote) return;
+    final note = _activeVoice[_cursor.index];
+    _commit(() => note.tieToNext = !note.tieToNext);
+  }
+
+  /// Slur (лига фразировки) — авто по выделению. Первый вызов ставит якорь на
+  /// ноте под курсором; второй (курсор в том же голосе на другой ноте) —
+  /// навешивает дугу на диапазон [якорь..курсор]. Повтор на той же ноте или
+  /// смена голоса — сброс якоря.
+  void _toggleSlur() {
+    if (!_cursorOnNote) return;
+    final a = _slurAnchor;
+    final sameNote = a != null &&
+        a.voice == _cursor.voice &&
+        a.measure == _cursor.measure &&
+        a.index == _cursor.index;
+
+    if (a == null || a.voice != _cursor.voice || sameNote) {
+      // поставить/переставить якорь, либо снять его повторным тапом на нём
+      setState(() {
+        _slurAnchor = sameNote
+            ? null
+            : EditorCursor(
+                measure: _cursor.measure,
+                voice: _cursor.voice,
+                index: _cursor.index);
+      });
+      _render();
+      return;
+    }
+
+    final aR = _rank(a.measure, a.index);
+    final cR = _rank(_cursor.measure, _cursor.index);
+    final lo = aR <= cR ? a : _cursor;
+    final hi = aR <= cR ? _cursor : a;
+    _applySlur(a.voice, lo.measure, lo.index, hi.measure, hi.index);
+    setState(() => _slurAnchor = null);
+  }
+
+  /// Навесить фразировочную дугу на диапазон одного голоса: slurStart на первой
+  /// ноте, slurStop на последней; промежуточные маркеры внутри диапазона
+  /// сбрасываются (этап 1 — без вложенных дуг).
+  void _applySlur(String voice, int m0, int i0, int m1, int i1) {
+    _commit(() {
+      final lo = _rank(m0, i0);
+      final hi = _rank(m1, i1);
+      for (var m = m0; m <= m1; m++) {
+        final notes = _voiceOf(_score!, m, voice);
+        for (var ix = 0; ix < notes.length; ix++) {
+          final r = _rank(m, ix);
+          if (r < lo || r > hi) continue;
+          notes[ix]
+            ..slurStart = (m == m0 && ix == i0)
+            ..slurStop = (m == m1 && ix == i1);
+        }
+      }
     });
   }
 
@@ -729,11 +862,16 @@ class _EditorScreenState extends State<EditorScreen> {
             duration: _duration,
             dots: _dots,
             stackMode: _stackMode,
+            tieOnCursor: _cursorOnNote && _activeVoice[_cursor.index].tieToNext,
+            slurArmed: _slurAnchor != null,
+            canLiga: _cursorOnNote,
             filledBeats: filledBeats,
             totalBeats: totalBeats,
             onDuration: (d) => setState(() => _duration = d),
             onDots: (v) => setState(() => _dots = v),
             onToggleStack: () => setState(() => _stackMode = !_stackMode),
+            onToggleTie: _toggleTie,
+            onToggleSlur: _toggleSlur,
             onInsert: (keys) => _insertNote(keys: keys),
             onRest: () => _insertNote(keys: const [], rest: true),
             onDelete: _deleteAtCursor,
@@ -770,11 +908,16 @@ class _EditorPanel extends StatelessWidget {
   final String duration;
   final int dots;
   final bool stackMode;
+  final bool tieOnCursor; // у ноты под курсором стоит лига длительности
+  final bool slurArmed; // активен набор лиги фразировки (якорь поставлен)
+  final bool canLiga; // курсор на реальной ноте — лиги применимы
   final double filledBeats;
   final int totalBeats;
   final ValueChanged<String> onDuration;
   final ValueChanged<int> onDots;
   final VoidCallback onToggleStack;
+  final VoidCallback onToggleTie;
+  final VoidCallback onToggleSlur;
   final ValueChanged<List<String>> onInsert;
   final VoidCallback onRest;
   final VoidCallback onDelete;
@@ -787,11 +930,16 @@ class _EditorPanel extends StatelessWidget {
     required this.duration,
     required this.dots,
     required this.stackMode,
+    required this.tieOnCursor,
+    required this.slurArmed,
+    required this.canLiga,
     required this.filledBeats,
     required this.totalBeats,
     required this.onDuration,
     required this.onDots,
     required this.onToggleStack,
+    required this.onToggleTie,
+    required this.onToggleSlur,
     required this.onInsert,
     required this.onRest,
     required this.onDelete,
@@ -912,76 +1060,117 @@ class _EditorPanel extends StatelessWidget {
 
   // --- Зона 2: редактирование + режимы ----------------------------------
   // Слева — голос (фортепиано) и курсор ◀▶ (на границе такта он сам переходит
-  // в соседний, поэтому отдельных «прыжков по тактам» нет); по центру — номер
-  // такта; справа — аккорд-режим, пауза, удаление.
+  // в соседний); номер такта; справа — режимы аккорда/лиг, пауза, удаление.
+  // Кнопок много (Tie/Slur добавили ширины) — строка горизонтально
+  // прокручиваема, чтобы не переполняться на узких экранах (6").
   Widget _editStrip(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Row(
-      children: [
-        if (!_isDrums)
-          SegmentedButton<String>(
-            style: const ButtonStyle(visualDensity: VisualDensity.compact),
-            segments: const [
-              ButtonSegment(value: 'treble', label: Text('𝄞')),
-              ButtonSegment(value: 'bass', label: Text('𝄢')),
-            ],
-            selected: {cursor.voice},
-            onSelectionChanged: (s) => onSwitchVoice(s.first),
+    const tight = BoxConstraints(minWidth: 34, minHeight: 38);
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          if (!_isDrums)
+            SegmentedButton<String>(
+              style: const ButtonStyle(visualDensity: VisualDensity.compact),
+              segments: const [
+                ButtonSegment(value: 'treble', label: Text('𝄞')),
+                ButtonSegment(value: 'bass', label: Text('𝄢')),
+              ],
+              selected: {cursor.voice},
+              onSelectionChanged: (s) => onSwitchVoice(s.first),
+            ),
+          IconButton(
+            tooltip: 'Назад',
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: tight,
+            icon: const Icon(Icons.chevron_left),
+            onPressed: () => onMoveNote(-1),
           ),
-        IconButton(
-          tooltip: 'Назад',
-          visualDensity: VisualDensity.compact,
-          icon: const Icon(Icons.chevron_left),
-          onPressed: () => onMoveNote(-1),
-        ),
-        IconButton(
-          tooltip: 'Вперёд',
-          visualDensity: VisualDensity.compact,
-          icon: const Icon(Icons.chevron_right),
-          onPressed: () => onMoveNote(1),
-        ),
-        Expanded(
-          child: Center(
+          IconButton(
+            tooltip: 'Вперёд',
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: tight,
+            icon: const Icon(Icons.chevron_right),
+            onPressed: () => onMoveNote(1),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
             child: Text(
               'Такт ${cursor.measure + 1}/${score.measures.length}',
               maxLines: 1,
-              overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.labelMedium,
             ),
           ),
-        ),
-        // Аккорд-режим: залитый фон при активности — постоянный индикатор.
-        IconButton(
-          tooltip: stackMode ? 'Аккорд-режим включён' : 'Аккорд-режим',
-          isSelected: stackMode,
-          visualDensity: VisualDensity.compact,
-          icon: const Icon(Icons.layers_outlined),
-          selectedIcon: const Icon(Icons.layers),
-          style: IconButton.styleFrom(
-            backgroundColor: stackMode ? scheme.secondaryContainer : null,
-            foregroundColor: stackMode ? scheme.onSecondaryContainer : null,
+          // Аккорд-режим: залитый фон при активности — постоянный индикатор.
+          IconButton(
+            tooltip: stackMode ? 'Аккорд-режим включён' : 'Аккорд-режим',
+            isSelected: stackMode,
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: tight,
+            icon: const Icon(Icons.layers_outlined),
+            selectedIcon: const Icon(Icons.layers),
+            style: IconButton.styleFrom(
+              backgroundColor: stackMode ? scheme.secondaryContainer : null,
+              foregroundColor: stackMode ? scheme.onSecondaryContainer : null,
+            ),
+            onPressed: onToggleStack,
           ),
-          onPressed: onToggleStack,
-        ),
-        const SizedBox(width: 2),
-        IconButton.filledTonal(
-          tooltip: 'Пауза',
-          visualDensity: VisualDensity.compact,
-          icon: const Icon(Icons.music_off),
-          onPressed: onRest,
-        ),
-        const SizedBox(width: 2),
-        IconButton.filledTonal(
-          tooltip: 'Стереть',
-          visualDensity: VisualDensity.compact,
-          icon: const Icon(Icons.backspace_outlined),
-          style: IconButton.styleFrom(
-            backgroundColor: scheme.errorContainer,
-            foregroundColor: scheme.onErrorContainer,
+          // Tie — лига ДЛИТЕЛЬНОСТИ (тумблер на ноте под курсором).
+          IconButton(
+            tooltip: 'Лига длительности (Tie)',
+            isSelected: tieOnCursor,
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: tight,
+            icon: const Icon(Icons.link),
+            style: IconButton.styleFrom(
+              backgroundColor: tieOnCursor ? scheme.secondaryContainer : null,
+              foregroundColor: tieOnCursor ? scheme.onSecondaryContainer : null,
+            ),
+            onPressed: canLiga ? onToggleTie : null,
           ),
-          onPressed: onDelete,
-        ),
-      ],
+          // Slur — лига ФРАЗИРОВКИ (авто по выделению: якорь -> курсор).
+          IconButton(
+            tooltip: slurArmed
+                ? 'Лига фразировки: выберите второй конец'
+                : 'Лига фразировки (Slur)',
+            isSelected: slurArmed,
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: tight,
+            icon: const Icon(Icons.gesture),
+            style: IconButton.styleFrom(
+              backgroundColor: slurArmed ? scheme.tertiaryContainer : null,
+              foregroundColor: slurArmed ? scheme.onTertiaryContainer : null,
+            ),
+            onPressed: canLiga ? onToggleSlur : null,
+          ),
+          IconButton.filledTonal(
+            tooltip: 'Пауза',
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: tight,
+            icon: const Icon(Icons.music_off),
+            onPressed: onRest,
+          ),
+          IconButton.filledTonal(
+            tooltip: 'Стереть',
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: tight,
+            icon: const Icon(Icons.backspace_outlined),
+            style: IconButton.styleFrom(
+              backgroundColor: scheme.errorContainer,
+              foregroundColor: scheme.onErrorContainer,
+            ),
+            onPressed: onDelete,
+          ),
+        ],
+      ),
     );
   }
 }
