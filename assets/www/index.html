@@ -107,29 +107,16 @@
     import { AudioEngine } from './js/audio/audio_engine.js';
     import { SampledPiano } from './js/audio/sampled_piano.js';
     import { SampledDrums } from './js/audio/sampled_drums.js';
+    import { state } from './js/utils/state.js';
+    import { el, showError, PAD } from './js/utils/dom.js';
+    import { durationBeats } from './js/domain/durations.js';
+    import { tupletScaleOf } from './js/domain/tuplets.js';
+    import { keyToMidi } from './js/domain/pitch.js';
+    import { drumType } from './js/domain/drums.js';
+    import { sameKeys, nextRealNote, voiceListOf } from './js/domain/notes.js';
 
         const REST_KEY = { treble: 'b/4', bass: 'd/3', percussion: 'b/4' };
-        const PAD = 8;            // CSS-padding контейнера (см. #notation-container)
-        let lastPayload = null;   // отрисуем заново при ресайзе
-        let lastLayout = null;    // геометрия последней раскладки (для экспорта)
-        let noteHits = [];        // bounding box'ы нот для тап-навигации
-        let noteHitIndex = {};    // noteId ("m:v:i") -> bbox (playhead/подсветка)
-        let noteObjs = {};        // noteId -> VF.StaveNote (для отрисовки лиг Tie/Slur)
-        let noteTransform = {};   // noteId -> {tx, sx} горизонт. сжатие такта (для лиг)
         let tapAttached = false;
-
-        function el(id) { return document.getElementById(id); }
-
-        function showError(msg) {
-            const c = el('notation-container');
-            let e = el('engine-error');
-            if (!e) {
-                e = document.createElement('div');
-                e.id = 'engine-error';
-                c.appendChild(e);
-            }
-            e.textContent = msg;
-        }
 
         function clearCanvas() {
             const c = el('notation-container');
@@ -208,9 +195,9 @@
             // схлопывает документ и браузер сбрасывает scrollY в 0.
             const prevScrollY = window.scrollY || document.documentElement.scrollTop || 0;
             clearCanvas();
-            noteHits = [];
-            noteObjs = {};
-            noteTransform = {};
+            state.noteHits = [];
+            state.noteObjs = {};
+            state.noteTransform = {};
 
             const container = el('notation-container');
             const width = forcedWidth || Math.max(320, container.clientWidth);
@@ -369,9 +356,9 @@
             catch (err) { console.error('drawTiesAndSlurs failed:', err); }
 
             // индекс координат нот по noteId — для note-synced playhead/подсветки
-            noteHitIndex = {};
-            for (let h = 0; h < noteHits.length; h++) {
-                noteHitIndex[noteHits[h].id] = noteHits[h];
+            state.noteHitIndex = {};
+            for (let h = 0; h < state.noteHits.length; h++) {
+                state.noteHitIndex[state.noteHits[h].id] = state.noteHits[h];
             }
 
             // Подсветка выделения при наборе лиги фразировки (slur).
@@ -380,7 +367,7 @@
             // геометрия раскладки — нужна плееру и автоскроллу.
             // geom[i] = {row, x, w}: число тактов в строке переменное, поэтому
             // строку/координаты такта берём отсюда, а не из фиксированного perRow.
-            lastLayout = { width: width, totalH: totalH, rowH: rowH, rows: rows,
+            state.lastLayout = { width: width, totalH: totalH, rowH: rowH, rows: rows,
                            geom: geom, margin: margin };
 
             // если идёт воспроизведение — пересобрать события под новую раскладку
@@ -399,16 +386,16 @@
         // строка курсора выходит за вьюпорт — минимально доводим её к краю;
         // иначе вид остаётся ровно там, где был (без «прыжка» наверх).
         function keepCursorInView(cursor, prevY) {
-            if (!lastLayout) return;
+            if (!state.lastLayout) return;
             const vh = window.innerHeight || document.documentElement.clientHeight;
             const y = prevY || 0;
             let target = y;
             const mi = cursor ? cursor.measure : -1;
-            const g = (mi != null && mi >= 0 && lastLayout.geom) ? lastLayout.geom[mi] : null;
+            const g = (mi != null && mi >= 0 && state.lastLayout.geom) ? state.lastLayout.geom[mi] : null;
             if (g) {
                 const row = g.row;
-                const rowTop = PAD + lastLayout.margin + row * lastLayout.rowH;
-                const rowBottom = rowTop + lastLayout.rowH;
+                const rowTop = PAD + state.lastLayout.margin + row * state.lastLayout.rowH;
+                const rowBottom = rowTop + state.lastLayout.rowH;
                 if (rowTop < y) target = rowTop - 8;
                 else if (rowBottom > y + vh) target = rowBottom - vh + 8;
             }
@@ -523,7 +510,7 @@
                     if (!bb) return;
                     const hx = startX + (bb.getX() - startX) * sx;
                     const id = t.__hit.m + ':' + t.__hit.v + ':' + t.__hit.i;
-                    noteHits.push({
+                    state.noteHits.push({
                         id: id,
                         m: t.__hit.m, v: t.__hit.v, i: t.__hit.i,
                         x: hx, y: bb.getY(), w: bb.getW() * sx, h: bb.getH(),
@@ -534,8 +521,8 @@
                     // <g scale>, и лигу нужно рисовать в ТОМ ЖЕ трансформе, иначе
                     // она уезжает по несжатым координатам (за край строки).
                     if (t.__hit.i >= 0) {
-                        noteObjs[id] = t;
-                        noteTransform[id] = sx < 1
+                        state.noteObjs[id] = t;
+                        state.noteTransform[id] = sx < 1
                             ? { tx: startX * (1 - sx), sx: sx }
                             : { tx: 0, sx: 1 };
                     }
@@ -566,32 +553,6 @@
         //  редкий overflow) дуга может слегка не совпасть — координаты нот
         //  доскейловые. Приемлемо для первого этапа.
         // =================================================================
-
-        function sameKeys(a, b) {
-            if (!a || !b || a.length !== b.length) return false;
-            for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-            return true;
-        }
-
-        // Следующая РЕАЛЬНАЯ нота того же голоса после (mi, ni): сначала в этом
-        // такте, иначе первая в последующих тактах. Авто-паузы добивки в payload
-        // не приходят отдельным флагом, но у них keys=[] и rest=true — здесь нас
-        // интересует именно следующий слот, валидность проверяет вызывающий.
-        function nextRealNote(measures, voiceId, mi, ni) {
-            const here = (measures[mi] && measures[mi][voiceId]) || [];
-            if (ni + 1 < here.length) {
-                return { mi: mi, ni: ni + 1, note: here[ni + 1] };
-            }
-            for (let m = mi + 1; m < measures.length; m++) {
-                const notes = (measures[m] && measures[m][voiceId]) || [];
-                if (notes.length > 0) return { mi: m, ni: 0, note: notes[0] };
-            }
-            return null;
-        }
-
-        function voiceListOf(score) {
-            return score.instrument === 'drums' ? ['perc'] : ['treble', 'bass'];
-        }
 
         // Рисует [fn] внутри того же горизонтального трансформа сжатия [tr],
         // что и ноты такта (translate+scaleX). Иначе лига считалась бы по
@@ -668,7 +629,7 @@
             } catch (e) { console.error('slur draw failed:', e); }
         }
 
-        // [geom] -> строка такта (row); [noteObjs]/[noteTransform] -> объект и
+        // [geom] -> строка такта (row); [state.noteObjs]/[state.noteTransform] -> объект и
         // трансформ сжатия ноты по noteId.
         function drawTiesAndSlurs(VF, ctx, score, geom) {
             const measures = score.measures || [];
@@ -688,11 +649,11 @@
                         // Лига длительности валидна лишь между нотами одной высоты.
                         if (!p || p.note.rest || !sameKeys(n.keys, p.note.keys)) continue;
                         const idA = idOf(mi, v, ni), idB = idOf(p.mi, v, p.ni);
-                        const a = noteObjs[idA], b = noteObjs[idB];
+                        const a = state.noteObjs[idA], b = state.noteObjs[idB];
                         if (!a || !b) continue;
                         const idx = n.keys.map(function (_, k) { return k; });
-                        drawTie(VF, ctx, a, mi, rowOf(mi), noteTransform[idA],
-                            b, p.mi, rowOf(p.mi), noteTransform[idB], idx);
+                        drawTie(VF, ctx, a, mi, rowOf(mi), state.noteTransform[idA],
+                            b, p.mi, rowOf(p.mi), state.noteTransform[idB], idx);
                     }
                 }
             }
@@ -710,9 +671,9 @@
                         if (n.slurStop && stack.length > 0) {
                             const s = stack.pop();
                             const idA = idOf(s.mi, v, s.ni), idB = idOf(mi, v, ni);
-                            const a = noteObjs[idA], b = noteObjs[idB];
+                            const a = state.noteObjs[idA], b = state.noteObjs[idB];
                             if (a && b) drawSlur(VF, ctx, a, s.mi, rowOf(s.mi),
-                                noteTransform[idA], b, mi, rowOf(mi), noteTransform[idB]);
+                                state.noteTransform[idA], b, mi, rowOf(mi), state.noteTransform[idB]);
                         }
                     }
                 }
@@ -734,8 +695,8 @@
             layer.style.pointerEvents = 'none';
             const lo = sel.m0 * 100000 + sel.i0;
             const hi = sel.m1 * 100000 + sel.i1;
-            for (let h = 0; h < noteHits.length; h++) {
-                const hh = noteHits[h];
+            for (let h = 0; h < state.noteHits.length; h++) {
+                const hh = state.noteHits[h];
                 if (hh.v !== sel.voice || hh.i < 0) continue;
                 const rank = hh.m * 100000 + hh.i;
                 if (rank < lo || rank > hi) continue;
@@ -757,13 +718,13 @@
             const container = el('notation-container');
             container.addEventListener('click', function (e) {
                 const svg = container.querySelector('svg');
-                if (!svg || noteHits.length === 0) return;
+                if (!svg || state.noteHits.length === 0) return;
                 const rect = svg.getBoundingClientRect();
                 const px = e.clientX - rect.left;
                 const py = e.clientY - rect.top;
 
                 let best = null, bestD = Infinity;
-                for (const hh of noteHits) {
+                for (const hh of state.noteHits) {
                     const cx = hh.x + hh.w / 2;
                     const cy = hh.y + hh.h / 2;
                     const d = (px - cx) * (px - cx) + (py - cy) * (py - cy);
@@ -789,82 +750,6 @@
         //  звука и визуала привязан к AudioContext.currentTime (паттерн
         //  «двух часов»). setTimeout как механизм синхронизации не применяется.
         // =================================================================
-
-        // длительность VexFlow -> доли в ЧЕТВЕРТЯХ (quarter beats)
-        const QBEATS = { w: 4, h: 2, q: 1, '8': 0.5, '16': 0.25, '32': 0.125, '64': 0.0625 };
-
-        // Доли в четвертях с учётом точек: каждая точка добавляет половину
-        // предыдущего приращения (1 точка = base·1.5, 2 = base·1.75 и т.д.).
-        function durationBeats(dur, dots) {
-            const base = QBEATS[dur] != null ? QBEATS[dur] : 1;
-            let add = base / 2, total = base;
-            for (let d = 0; d < (dots || 0); d++) { total += add; add /= 2; }
-            return total;
-        }
-
-        // Множитель реального времени ноты от tuplet-группы (normal/actual).
-        // 1.0 вне группы. Триоль 3:2 -> 2/3.
-        function tupletScaleOf(n) {
-            return (n && n.tuplet && n.tuplet.actual)
-                ? n.tuplet.normal / n.tuplet.actual : 1;
-        }
-
-        // VexFlow-ключ "c#/4" -> частота (Гц); для ударных не используется
-        const SEMI = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
-        function keyToFreq(key) {
-            const parts = key.split('/');
-            const la = (parts[0] || 'a').toLowerCase();
-            let semis = SEMI[la[0]];
-            if (semis === undefined) return 440;
-            for (let k = 1; k < la.length; k++) {
-                if (la[k] === '#') semis += 1;
-                else if (la[k] === 'b') semis -= 1;
-            }
-            const octave = parseInt(parts[1], 10);
-            const midi = (octave + 1) * 12 + semis;
-            return 440 * Math.pow(2, (midi - 69) / 12);
-        }
-
-        // VexFlow-ключ "c#/4" -> MIDI-номер (для сэмплерного рояля)
-        function keyToMidi(key) {
-            const parts = key.split('/');
-            const la = (parts[0] || 'a').toLowerCase();
-            let semis = SEMI[la[0]];
-            if (semis === undefined) semis = 9;
-            for (let k = 1; k < la.length; k++) {
-                if (la[k] === '#') semis += 1;
-                else if (la[k] === 'b') semis -= 1;
-            }
-            return (parseInt(parts[1], 10) + 1) * 12 + semis;
-        }
-
-        // Полный ключ VexFlow "линия/октава[/головка]" -> канонический ударный.
-        // Головка различает артикуляции на одной линии (хай-хэт x2/x3, и т.д.).
-        const DRUM_FULL = {
-            'f/4': 'kick',
-            'c/5': 'snare',
-            'g/5/x2': 'hihat_closed',
-            'g/5/x3': 'hihat_open',
-            'd/4/x2': 'hihat_pedal',
-            'a/5/x2': 'crash1',
-            'b/5/x2': 'crash2',
-            'f/5/x2': 'ride',
-            'f/5/d0': 'ride_bell',
-            'e/5': 'tom_high',
-            'd/5': 'tom_mid',
-            'a/4': 'tom_floor',
-        };
-        // Запасное сопоставление по позиции — для старых партитур без головки.
-        const DRUM_BASE = {
-            'f/4': 'kick', 'c/5': 'snare', 'g/5': 'hihat_closed', 'd/4': 'hihat_pedal',
-            'e/5': 'tom_high', 'd/5': 'tom_mid', 'a/4': 'tom_floor',
-            'a/5': 'crash1', 'b/5': 'crash2', 'f/5': 'ride',
-        };
-        function drumType(key) {
-            const p = key.split('/');
-            const full = p[0] + '/' + p[1] + (p[2] ? '/' + p[2] : '');
-            return DRUM_FULL[full] || DRUM_BASE[p[0] + '/' + p[1]] || 'snare';
-        }
 
         // Tie-merge для playback: внутри каждого голоса (события уже в порядке
         // времени) поглощаем цепочку лиг длительности в одно событие — один
@@ -1004,7 +889,7 @@
             // onset'ы (аккорд / treble+bass на одной доле) усредняются в один X.
             // Замыкающий якорь ставим у правого барлайна строки.
             _buildXMap: function () {
-                const lay = lastLayout;
+                const lay = state.lastLayout;
                 const rows = lay ? lay.rows : 1;
                 const geom = (lay && lay.geom) || [];
                 const measureQ = this.comp.measureQ || 4;
@@ -1015,7 +900,7 @@
                 const ev = this.comp.events;
                 for (let i = 0; i < ev.length; i++) {
                     const e = ev[i];
-                    const hb = noteHitIndex[e.noteId];
+                    const hb = state.noteHitIndex[e.noteId];
                     if (!hb) continue;
                     const mIdx = Math.floor(e.startBeat / measureQ + 1e-6);
                     const g = geom[mIdx];
@@ -1057,9 +942,9 @@
 
             // вызывается из render(): пересобрать события под правки в редакторе
             onRender: function () {
-                if (!this.playing || !lastPayload) return;
+                if (!this.playing || !state.lastPayload) return;
                 const curBeat = this.currentBeat();
-                this.comp = compilePlayback(lastPayload);
+                this.comp = compilePlayback(state.lastPayload);
                 this._buildXMap();
                 this.nextEvent = 0;
                 while (this.nextEvent < this.comp.events.length &&
@@ -1147,7 +1032,7 @@
             _rowForBeat: function (curBeat) {
                 const measureQ = this.comp.measureQ || 4;
                 const total = this.comp.totalBeats;
-                const geom = (lastLayout && lastLayout.geom) || [];
+                const geom = (state.lastLayout && state.lastLayout.geom) || [];
                 const totalMeasures = Math.max(1, Math.round(total / measureQ));
                 let mIdx = Math.floor(Math.max(0, Math.min(curBeat, total)) / measureQ + 1e-6);
                 if (mIdx >= totalMeasures) mIdx = totalMeasures - 1;
@@ -1163,7 +1048,7 @@
                 if (!this.followPlayback) return;
                 if (row === this._followRow) return;
                 this._followRow = row;
-                const lay = lastLayout;
+                const lay = state.lastLayout;
                 if (!lay) return;
                 const vh = window.innerHeight || document.documentElement.clientHeight;
                 const rowTop = PAD + lay.margin + row * lay.rowH;
@@ -1205,8 +1090,8 @@
                     x = a.x + frac * (c.x - a.x);
                 }
 
-                const rowH = lastLayout ? lastLayout.rowH : 200;
-                const margin = lastLayout ? lastLayout.margin : 8;
+                const rowH = state.lastLayout ? state.lastLayout.rowH : 200;
+                const margin = state.lastLayout ? state.lastLayout.margin : 8;
                 ph.style.left = (PAD + x) + 'px';
                 ph.style.top = (PAD + margin + row * rowH) + 'px';
                 ph.style.height = (rowH - 8) + 'px';
@@ -1237,7 +1122,7 @@
                 }
                 for (const id in active) {
                     if (this._hl[id]) continue;
-                    const hb = noteHitIndex[id];
+                    const hb = state.noteHitIndex[id];
                     if (!hb) continue;
                     const d = document.createElement('div');
                     d.className = 'note-hl';
@@ -1647,8 +1532,8 @@
             renderB64: function (b64) {
                 try {
                     const json = decodeURIComponent(escape(window.atob(b64)));
-                    lastPayload = JSON.parse(json);
-                    render(lastPayload);
+                    state.lastPayload = JSON.parse(json);
+                    render(state.lastPayload);
                 } catch (e) {
                     showError('Ошибка разбора партитуры: ' + e.message);
                 }
@@ -1739,7 +1624,7 @@
         // текущей партитуры с начала, 'PAUSE' останавливает.
         window.handlePlaybackCommand = function (action, value) {
             if (action === 'PLAY') {
-                Playback.start(lastPayload, value);
+                Playback.start(state.lastPayload, value);
             } else if (action === 'PAUSE') {
                 Playback.stop();
             }
@@ -1755,7 +1640,7 @@
         window.addEventListener('resize', function () {
             clearTimeout(resizeTimer);
             resizeTimer = setTimeout(function () {
-                if (lastPayload) render(lastPayload);
+                if (state.lastPayload) render(state.lastPayload);
             }, 180);
         });
     </script>
