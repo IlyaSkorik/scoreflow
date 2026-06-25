@@ -44,7 +44,7 @@ class ScoreFlowApp extends StatelessWidget {
   final ScoreRepository _repository = ScoreRepository();
 
   @override
-  Widget build(BuildContext context) {
+Widget build(BuildContext context) {
     return MaterialApp(
       title: 'ScoreFlow',
       debugShowCheckedModeBanner: false,

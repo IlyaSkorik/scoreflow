@@ -32,7 +32,9 @@ flutter:
   # Прописываем папку под локальный веб-движок нот (AlphaTab/VexFlow)
   assets:
     - assets/www/
+    # ES-модули движка
     - assets/www/js/
+    - assets/www/js/audio/
     # Сэмплы концертного рояля (Salamander, оффлайн). Файлы кладёт
     # tools/fetch_salamander.mjs; manifest.json присутствует всегда.
     - assets/www/piano/
