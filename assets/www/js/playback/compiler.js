@@ -4,6 +4,8 @@
 import { durationBeats } from '../domain/durations.js';
 import { tupletScaleOf } from '../domain/tuplets.js';
 import { sameKeys } from '../domain/notes.js';
+import { resolveMidi } from '../domain/pitch.js';
+import { keySignatureAlterations } from '../domain/keysig.js';
 
 // Tie-merge для playback: внутри каждого голоса (события уже в порядке
 // времени) поглощаем цепочку лиг длительности в одно событие — один
@@ -50,6 +52,9 @@ export function compilePlayback(payload) {
     const voiceIds = isDrums ? ['perc'] : ['treble', 'bass'];
     const measures = payload.measures || [];
     const measureQ = beats * (4 / beatValue); // длина такта в четвертях
+    // Альтерации тональности (ступень -> сдвиг) — одна из трёх составляющих
+    // реальной высоты. Для ударных высота не считается.
+    const keyAlt = isDrums ? {} : keySignatureAlterations(payload.keySignature || 'C');
     let events = [];
 
     for (let mi = 0; mi < measures.length; mi++) {
@@ -59,19 +64,37 @@ export function compilePlayback(payload) {
             const notes = (measures[mi] && measures[mi][v]) || [];
             if (notes.length === 0) {
                 events.push({ noteId: mi + ':' + v + ':-1', startBeat: base,
-                    durationBeats: measureQ, keys: [], voiceId: v, rest: true });
+                    durationBeats: measureQ, keys: [], midis: [], voiceId: v, rest: true });
                 continue;
             }
+            // Состояние знаков такта на ЭТОМ стане (голосе): (ступень+октава) ->
+            // сдвиг. Знак действует до конца такта на той же высоте; сбрасывается
+            // на каждый такт/голос (отдельные станы — независимые правила).
+            const measureAcc = {};
             let acc = 0;
             for (let ni = 0; ni < notes.length; ni++) {
                 const n = notes[ni];
                 // Реальное время с учётом tuplet (нестандартная ритмика).
                 const q = durationBeats(n.duration, n.dots) * tupletScaleOf(n);
+                const keys = n.keys || [];
+                // Реальная высота (MIDI) каждой головки — ЕДИНОЕ место расчёта
+                // (тональность + знак + правила такта). Вызывается для всех нот
+                // по порядку, чтобы корректно накапливать знаки такта (даже для
+                // нот, которые позже сольются лигой). Ударные высоту не считают.
+                const midis = [];
+                if (!n.rest && !isDrums) {
+                    for (let k = 0; k < keys.length; k++)
+                        midis.push(resolveMidi(keys[k], keyAlt, measureAcc));
+                }
                 events.push({
                     noteId: mi + ':' + v + ':' + ni,
                     startBeat: base + acc,
                     durationBeats: q,
-                    keys: n.keys || [],
+                    keys: keys,
+                    // Разрешённые MIDI-высоты головок (с учётом тональности и
+                    // правил такта). Плеер играет их напрямую — без повторного
+                    // парсинга ключей.
+                    midis: midis,
                     voiceId: v,
                     rest: !!n.rest,
                     // Tie (лига длительности): объединяется в одно

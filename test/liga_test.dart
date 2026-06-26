@@ -7,26 +7,26 @@ import 'package:scoreflow/models/score.dart';
 void main() {
   group('Модель лиг — раздельные сущности Tie/Slur', () {
     test('по умолчанию все флаги выключены', () {
-      final n = MusicNote(keys: const ['c/4'], duration: 'q');
+      final n = MusicNote.fromKeys(keys: const ['c/4'], duration: 'q');
       expect(n.tieToNext, false);
       expect(n.slurStart, false);
       expect(n.slurStop, false);
     });
 
     test('toJson сериализует только выставленные флаги', () {
-      final plain = MusicNote(keys: const ['c/4'], duration: 'q').toJson();
+      final plain = MusicNote.fromKeys(keys: const ['c/4'], duration: 'q').toJson();
       expect(plain.containsKey('tieToNext'), false);
       expect(plain.containsKey('slurStart'), false);
       expect(plain.containsKey('slurStop'), false);
 
-      final tied = MusicNote(keys: const ['c/4'], duration: 'q', tieToNext: true)
+      final tied = MusicNote.fromKeys(keys: const ['c/4'], duration: 'q', tieToNext: true)
           .toJson();
       expect(tied['tieToNext'], true);
       expect(tied.containsKey('slurStart'), false);
     });
 
     test('round-trip toJson/fromJson сохраняет каждый флаг независимо', () {
-      final src = MusicNote(
+      final src = MusicNote.fromKeys(
         keys: const ['c/4'],
         duration: 'h',
         tieToNext: true,
@@ -41,7 +41,7 @@ void main() {
     });
 
     test('copy() копирует флаги лиг (важно для snapshot-Undo)', () {
-      final src = MusicNote(
+      final src = MusicNote.fromKeys(
         keys: const ['c/4'],
         duration: 'q',
         tieToNext: true,
@@ -57,7 +57,7 @@ void main() {
     });
 
     test('Tie и Slur не делят одно поле — независимое переключение', () {
-      final n = MusicNote(keys: const ['c/4'], duration: 'q');
+      final n = MusicNote.fromKeys(keys: const ['c/4'], duration: 'q');
       n.tieToNext = true;
       expect(n.slurStart, false);
       expect(n.slurStop, false);
@@ -73,9 +73,9 @@ void main() {
     test('tieToNext переживает перепаковку через границу такта', () {
       // h(tie) + h + q  в 4/4: первый такт h+h, q уходит в следующий.
       final first =
-          MusicNote(keys: const ['c/4'], duration: 'h', tieToNext: true);
-      final second = MusicNote(keys: const ['c/4'], duration: 'h');
-      final third = MusicNote(keys: const ['c/4'], duration: 'q');
+          MusicNote.fromKeys(keys: const ['c/4'], duration: 'h', tieToNext: true);
+      final second = MusicNote.fromKeys(keys: const ['c/4'], duration: 'h');
+      final third = MusicNote.fromKeys(keys: const ['c/4'], duration: 'q');
       final bins = packVoice([first, second, third], 1.0); // 4/4
 
       expect(bins.length, 2);
@@ -88,11 +88,11 @@ void main() {
     });
 
     test('slurStart/slurStop остаются на нотах-концах после упаковки', () {
-      final a = MusicNote(keys: const ['c/4'], duration: 'q', slurStart: true);
-      final b = MusicNote(keys: const ['d/4'], duration: 'q');
-      final c = MusicNote(keys: const ['e/4'], duration: 'q');
-      final d = MusicNote(keys: const ['f/4'], duration: 'q', slurStop: true);
-      final e = MusicNote(keys: const ['g/4'], duration: 'q'); // -> новый такт
+      final a = MusicNote.fromKeys(keys: const ['c/4'], duration: 'q', slurStart: true);
+      final b = MusicNote.fromKeys(keys: const ['d/4'], duration: 'q');
+      final c = MusicNote.fromKeys(keys: const ['e/4'], duration: 'q');
+      final d = MusicNote.fromKeys(keys: const ['f/4'], duration: 'q', slurStop: true);
+      final e = MusicNote.fromKeys(keys: const ['g/4'], duration: 'q'); // -> новый такт
       final bins = packVoice([a, b, c, d, e], 1.0);
 
       expect(bins.length, 2);

@@ -87,7 +87,7 @@ const List<List<Object>> _baseTicks = [
 ];
 
 MusicNote _autoRest(String duration, int dots) =>
-    MusicNote(keys: const [], duration: duration, dots: dots, rest: true, auto: true);
+    MusicNote(pitches: const [], duration: duration, dots: dots, rest: true, auto: true);
 
 /// Заполняет диапазон [pos, pos+len) (в тиках) паузами power-of-two с
 /// выравниванием по сильным долям: на каждом шаге берём наибольшее базовое

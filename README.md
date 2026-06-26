@@ -26,6 +26,7 @@ parts and produces clean, page-based **A4 PDF** output without clipped bars.
 - 32nd and 64th notes
 - Ties (duration) and slurs (phrasing)
 - Tuplets — universal `actual:normal` (triplets, quintuplets, sextuplets, septuplets, custom)
+- Accidentals (♯ ♭ ♮ 𝄪 𝄫) — per-notehead model; playback pitch = key signature + accidental + measure rules
 - Key signatures & time signatures (incl. custom meters)
 - Professional beaming (beat groups, compound/irregular meters)
 - Automatic measure completion (canonical rest fill)

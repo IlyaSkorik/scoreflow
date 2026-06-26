@@ -117,7 +117,7 @@ class _Editor {
       final notes = _active;
       final pos = (cursor.index + 1).clamp(0, notes.length);
       notes.insert(pos,
-          MusicNote(keys: List.of(keys), duration: dur, dots: dots, rest: rest));
+          MusicNote.fromKeys(keys: List.of(keys), duration: dur, dots: dots, rest: rest));
       cursor.index = pos;
     });
   }
@@ -208,11 +208,11 @@ void main() {
           title: 'X',
           instrument: InstrumentType.piano,
           now: DateTime(2026));
-      s.measures[0].voice('treble').add(MusicNote(keys: ['c/4'], duration: 'q'));
+      s.measures[0].voice('treble').add(MusicNote.fromKeys(keys: ['c/4'], duration: 'q'));
 
       final c = s.copy();
       c.measures[0].voice('treble').first.keys = ['g/4'];
-      c.measures[0].voice('treble').add(MusicNote(keys: ['e/4'], duration: 'q'));
+      c.measures[0].voice('treble').add(MusicNote.fromKeys(keys: ['e/4'], duration: 'q'));
       c.tempo = 200;
 
       expect(s.measures[0].voice('treble').length, 1);
@@ -227,7 +227,7 @@ void main() {
           instrument: InstrumentType.piano,
           now: DateTime(2026));
       s.measures[0].voice('treble').add(
-          MusicNote(keys: const [], duration: 'h', rest: true, auto: true));
+          MusicNote.fromKeys(keys: const [], duration: 'h', rest: true, auto: true));
       final c = s.copy();
       expect(c.measures[0].voice('treble').first.auto, true);
     });

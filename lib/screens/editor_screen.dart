@@ -334,7 +334,7 @@ class _EditorScreenState extends State<EditorScreen> {
       final pos = next.clamp(0, notes.length);
       notes.insert(
           pos,
-          MusicNote(
+          MusicNote.fromKeys(
               keys: _sortedKeys(keys),
               duration: _duration,
               dots: _dots,
@@ -438,6 +438,31 @@ class _EditorScreenState extends State<EditorScreen> {
     if (!_cursorOnNote) return;
     final note = _activeVoice[_cursor.index];
     _commit(() => note.tieToNext = !note.tieToNext);
+  }
+
+  // --- Альтерация (Accidental) -----------------------------------------
+
+  /// Знак альтерации головок ноты под курсором, если он ЕДИН для всех голов
+  /// (иначе null — смешанный аккорд). Для подсветки активной кнопки инструмента.
+  Accidental? get _cursorAccidental {
+    if (!_cursorOnNote) return null;
+    final ps = _activeVoice[_cursor.index].pitches;
+    if (ps.isEmpty) return null;
+    final a = ps.first.accidental;
+    return ps.every((p) => p.accidental == a) ? a : null;
+  }
+
+  /// Инструмент «Альтерация»: ставит знак [acc] на ВСЕ головки ноты под
+  /// курсором (per-notehead модель; пока без выбора отдельной головки аккорда).
+  /// Для ударных неприменимо. Идёт через обычный пайплайн редактора
+  /// (_commit -> normalize -> render -> persist -> история Undo/Redo).
+  void _setAccidental(Accidental acc) {
+    if (_score!.instrument == InstrumentType.drums) return; // неприменимо
+    if (!_cursorOnNote) return;
+    final note = _activeVoice[_cursor.index];
+    _commit(() {
+      note.pitches = note.pitches.map((p) => p.withAccidental(acc)).toList();
+    });
   }
 
   /// Общий механизм выделения диапазона для slur и tuplet. Если якорь активен
@@ -978,6 +1003,7 @@ class _EditorScreenState extends State<EditorScreen> {
             tupletOnCursor:
                 _cursorOnNote && _activeVoice[_cursor.index].tuplet != null,
             canLiga: _cursorOnNote,
+            cursorAccidental: _cursorAccidental,
             filledBeats: filledBeats,
             totalBeats: totalBeats,
             onDuration: (d) => setState(() => _duration = d),
@@ -986,6 +1012,7 @@ class _EditorScreenState extends State<EditorScreen> {
             onToggleTie: _toggleTie,
             onToggleSlur: _toggleSlur,
             onTuplet: _onTuplet,
+            onAccidental: _setAccidental,
             onInsert: (keys) => _insertNote(keys: keys),
             onRest: () => _insertNote(keys: const [], rest: true),
             onDelete: _deleteAtCursor,
@@ -1026,6 +1053,7 @@ class _EditorPanel extends StatelessWidget {
   final bool selArmed; // активно выделение диапазона (якорь для slur/tuplet)
   final bool tupletOnCursor; // нота под курсором входит в tuplet-группу
   final bool canLiga; // курсор на реальной ноте — лиги/tuplet применимы
+  final Accidental? cursorAccidental; // знак ноты под курсором (для подсветки)
   final double filledBeats;
   final int totalBeats;
   final ValueChanged<String> onDuration;
@@ -1034,6 +1062,7 @@ class _EditorPanel extends StatelessWidget {
   final VoidCallback onToggleTie;
   final VoidCallback onToggleSlur;
   final VoidCallback onTuplet;
+  final ValueChanged<Accidental> onAccidental;
   final ValueChanged<List<String>> onInsert;
   final VoidCallback onRest;
   final VoidCallback onDelete;
@@ -1050,6 +1079,7 @@ class _EditorPanel extends StatelessWidget {
     required this.selArmed,
     required this.tupletOnCursor,
     required this.canLiga,
+    required this.cursorAccidental,
     required this.filledBeats,
     required this.totalBeats,
     required this.onDuration,
@@ -1058,6 +1088,7 @@ class _EditorPanel extends StatelessWidget {
     required this.onToggleTie,
     required this.onToggleSlur,
     required this.onTuplet,
+    required this.onAccidental,
     required this.onInsert,
     required this.onRest,
     required this.onDelete,
@@ -1083,6 +1114,11 @@ class _EditorPanel extends StatelessWidget {
               _fillBar(context), // индикатор заполнения такта (оба инструмента)
               const SizedBox(height: 6),
               _editStrip(context), // Зона 2 — редактирование + аккорд-режим
+              // Зона 2б — альтерация (только для клавишных; ударным неприменимо)
+              if (!_isDrums) ...[
+                const SizedBox(height: 6),
+                _accidentalRow(context),
+              ],
               const SizedBox(height: 8),
               // Зона 3 — ввод высоты/инструмента (вся ширина, зона большого пальца)
               SizedBox(
@@ -1307,6 +1343,60 @@ class _EditorPanel extends StatelessWidget {
             ),
             onPressed: onDelete,
           ),
+        ],
+      ),
+    );
+  }
+
+  /// Зона альтерации: ставит знак на ноту под курсором (per-notehead модель).
+  /// Применяется только к выделенной/текущей ноте. Активный знак подсвечен.
+  /// Используются нативные глифы; рисует знаки VexFlow на стане сам движок.
+  Widget _accidentalRow(BuildContext context) {
+    const items = <(Accidental, String, String)>[
+      (Accidental.none, '♮?', 'Без знака (по тональности)'),
+      (Accidental.natural, '♮', 'Бекар'),
+      (Accidental.sharp, '♯', 'Диез'),
+      (Accidental.flat, '♭', 'Бемоль'),
+      (Accidental.doubleSharp, '𝄪', 'Дубль-диез'),
+      (Accidental.doubleFlat, '𝄫', 'Дубль-бемоль'),
+    ];
+    final scheme = Theme.of(context).colorScheme;
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(right: 6, left: 2),
+            child: Text('Знак',
+                style: Theme.of(context).textTheme.labelMedium),
+          ),
+          for (final (acc, glyph, tip) in items)
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: () {
+                final active = cursorAccidental == acc;
+                return SizedBox(
+                  height: 38,
+                  child: TextButton(
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      minimumSize: const Size(34, 38),
+                      backgroundColor:
+                          active ? scheme.secondaryContainer : null,
+                      foregroundColor: active
+                          ? scheme.onSecondaryContainer
+                          : scheme.onSurface,
+                    ),
+                    onPressed: canLiga ? () => onAccidental(acc) : null,
+                    child: Tooltip(
+                      message: tip,
+                      child: Text(glyph, style: const TextStyle(fontSize: 18)),
+                    ),
+                  ),
+                );
+              }(),
+            ),
         ],
       ),
     );

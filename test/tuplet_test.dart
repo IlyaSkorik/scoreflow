@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:scoreflow/models/reflow.dart';
 import 'package:scoreflow/models/score.dart';
 
-MusicNote n(String dur, {Tuplet? tuplet, bool start = false}) => MusicNote(
+MusicNote n(String dur, {Tuplet? tuplet, bool start = false}) => MusicNote.fromKeys(
       keys: const ['c/4'],
       duration: dur,
       tuplet: tuplet,
@@ -20,14 +20,14 @@ void main() {
     });
 
     test('по умолчанию ноты вне tuplet', () {
-      final note = MusicNote(keys: const ['c/4'], duration: '8');
+      final note = MusicNote.fromKeys(keys: const ['c/4'], duration: '8');
       expect(note.tuplet, isNull);
       expect(note.tupletStart, false);
       expect(note.tupletScale, 1.0);
     });
 
     test('toJson пишет tuplet/tupletStart только когда заданы', () {
-      final plain = MusicNote(keys: const ['c/4'], duration: '8').toJson();
+      final plain = MusicNote.fromKeys(keys: const ['c/4'], duration: '8').toJson();
       expect(plain.containsKey('tuplet'), false);
       expect(plain.containsKey('tupletStart'), false);
 

@@ -35,6 +35,8 @@ print-grade output (clean A4 PDF, no clipped bars). Primary focus: keyboard
 - [x] VexFlow WebView engine (local HTTP server, offline asset resolution)
 - [x] PDF export (system print → "Save as PDF")
 - [x] A4 pagination (system/page layout with justification)
+- [x] Modular ES-module engine (`assets/www/js`: utils/domain/audio/playback/render/bridge; `index.html` is a thin entry point)
+- [x] Modern Android build (AGP 8.11.1 / Gradle 8.14 / Kotlin 2.2.20; no `--android-skip-build-dependency-validation`)
 
 ### Notation
 - [x] Piano notation (grand staff: treble + bass, brace)
@@ -52,6 +54,7 @@ print-grade output (clean A4 PDF, no clipped bars). Primary focus: keyboard
 - [x] Professional beaming (beat-group beams, compound/irregular meters)
 - [x] Partial ligature arcs across row/system breaks
 - [x] Key signature & time signature (incl. custom meters)
+- [x] **Accidentals** (♯ ♭ ♮ 𝄪 𝄫 — dedicated `Accidental`/`Pitch` model, per-notehead; editor tool, rendering, PDF; **playback pitch resolved once** = key signature + accidental + measure rules: carry-to-end-of-measure, per step+octave, natural cancels, auto-reset next measure; extensible to microtones)
 
 ### Playback
 - [x] Audio Engine (Web Audio, look-ahead scheduler, "two clocks")
@@ -110,8 +113,7 @@ _Nothing in active development right now._
       approximate; ties/slurs are drawn inside the measure's scale transform
 - [ ] Playback profiling (scheduler under dense scores)
 - [ ] Large score optimization (layout passes scale with measure count)
-- [ ] Android build modernization (AGP / Gradle; `--android-skip-build-dependency-validation` workaround in use)
-- [ ] No JS-side test harness (engine logic verified manually / ad-hoc jsdom)
+- [ ] Broader JS-side test harness (node ESM test exists for the pitch resolver — `test/js/accidental_resolver.test.mjs`; wider engine coverage still TBD, not wired into `flutter test`)
 
 ---
 

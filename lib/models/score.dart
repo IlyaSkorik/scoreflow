@@ -72,10 +72,162 @@ class Tuplet {
       Tuplet(j['actual'] as int? ?? 3, j['normal'] as int? ?? 2);
 }
 
+/// Знак альтерации головки ноты. ОТДЕЛЬНАЯ модель (не bool) — как в MuseScore/
+/// Dorico/Finale. Архитектура расширяема до микротонов/четвертьтонов простым
+/// добавлением значений: каждое значение само знает свой сдвиг в полутонах и
+/// обозначение VexFlow, поэтому остальной код переделывать не придётся.
+///
+/// [none] — знак НЕ записан: реальная высота следует тональности и правилам
+/// такта. [natural] (♮) — записанный бекар: отменяет тональность и предыдущие
+/// знаки в такте (сдвиг 0, но ЯВНЫЙ). Реальный (звучащий) сдвиг с учётом
+/// тональности и правил такта считается в ОДНОМ месте — playback-компиляторе
+/// движка; здесь хранится только то, что записано.
+enum Accidental {
+  none,
+  natural,
+  sharp,
+  flat,
+  doubleSharp,
+  doubleFlat;
+
+  /// Сдвиг полутонов относительно натуральной ступени (для записанного знака).
+  /// none/natural == 0 (natural при этом ЯВНО сбрасывает тональность — см.
+  /// [isExplicit] и компилятор).
+  int get semitoneShift => switch (this) {
+        Accidental.sharp => 1,
+        Accidental.flat => -1,
+        Accidental.doubleSharp => 2,
+        Accidental.doubleFlat => -2,
+        Accidental.none || Accidental.natural => 0,
+      };
+
+  /// Знак записан явно (рисуется глиф и переопределяет тональность/такт).
+  /// none — единственный «неявный» знак.
+  bool get isExplicit => this != Accidental.none;
+
+  /// Суффикс ключа VexFlow: '#','b','##','bb','n' или '' (для none).
+  String get vexSuffix => switch (this) {
+        Accidental.sharp => '#',
+        Accidental.flat => 'b',
+        Accidental.doubleSharp => '##',
+        Accidental.doubleFlat => 'bb',
+        Accidental.natural => 'n',
+        Accidental.none => '',
+      };
+
+  String get id => name;
+
+  static Accidental fromId(String? id) => Accidental.values.firstWhere(
+        (e) => e.name == id,
+        orElse: () => Accidental.none,
+      );
+
+  /// Разбор суффикса ключа VexFlow в знак (миграция legacy keys-строк).
+  static Accidental fromVexSuffix(String s) => switch (s) {
+        '#' => Accidental.sharp,
+        'b' => Accidental.flat,
+        '##' => Accidental.doubleSharp,
+        'bb' => Accidental.doubleFlat,
+        'n' => Accidental.natural,
+        _ => Accidental.none,
+      };
+}
+
+/// Одна головка ноты: натуральная ступень (буква a–g) + октава + знак
+/// альтерации. [head] — головка VexFlow для ударных (напр. 'x2' — крест у
+/// тарелок), null для обычных нот.
+///
+/// Реальная (звучащая) высота здесь НЕ хранится: MIDI = ступень + тональность
+/// + знак + правила такта, и считается в одном месте (playback-компилятор
+/// движка). Модель хранит лишь то, что записано на стане. Ключ VexFlow ([vexKey])
+/// — проекция для рендера/движка, строится из полей только на границе VexFlow.
+class Pitch {
+  final String step; // 'a'..'g' — натуральная буква без знака
+  final int octave;
+  final Accidental accidental;
+  final String? head;
+
+  const Pitch({
+    required this.step,
+    required this.octave,
+    this.accidental = Accidental.none,
+    this.head,
+  });
+
+  /// Натуральный полутон ступени внутри октавы (без знака): c=0 .. b=11.
+  static const Map<String, int> _stepSemi =
+      {'c': 0, 'd': 2, 'e': 4, 'f': 5, 'g': 7, 'a': 9, 'b': 11};
+
+  /// Ключ VexFlow: "f#/4", "fn/4" (бекар), "f/4" (без знака), "g/5/x2" (ударные).
+  /// Natural-aware: бекар кодируется суффиксом 'n', чтобы движок мог отличить
+  /// «следовать тональности» (none) от «явный бекар» при расчёте высоты.
+  String get vexKey {
+    final base = '$step${accidental.vexSuffix}/$octave';
+    return head == null ? base : '$base/$head';
+  }
+
+  /// Высотный ранг для сортировки головок аккорда снизу вверх (требование
+  /// VexFlow). По записанной высоте со знаком — устойчивый порядок.
+  int get rank =>
+      octave * 12 + (_stepSemi[step] ?? 0) + accidental.semitoneShift;
+
+  Pitch copy() =>
+      Pitch(step: step, octave: octave, accidental: accidental, head: head);
+
+  /// Та же головка с другим знаком (для инструмента «Альтерация» в редакторе).
+  Pitch withAccidental(Accidental a) =>
+      Pitch(step: step, octave: octave, accidental: a, head: head);
+
+  Map<String, dynamic> toJson() => {
+        'step': step,
+        'octave': octave,
+        if (accidental != Accidental.none) 'acc': accidental.id,
+        if (head != null) 'head': head,
+      };
+
+  factory Pitch.fromJson(Map<String, dynamic> j) => Pitch(
+        step: (j['step'] as String).toLowerCase(),
+        octave: j['octave'] as int? ?? 4,
+        accidental: Accidental.fromId(j['acc'] as String?),
+        head: j['head'] as String?,
+      );
+
+  /// Разбор legacy ключа VexFlow ("c#/4", "cb/3", "g/5/x2") в [Pitch] —
+  /// миграция старого формата (ноты до введения модели Accidental).
+  factory Pitch.fromVexKey(String key) {
+    final parts = key.split('/');
+    final la = parts.isNotEmpty ? parts[0] : 'c';
+    final step = la.isNotEmpty ? la[0].toLowerCase() : 'c';
+    final suffix = la.length > 1 ? la.substring(1).toLowerCase() : '';
+    final octave = parts.length > 1 ? (int.tryParse(parts[1]) ?? 4) : 4;
+    final head = parts.length > 2 ? parts[2] : null;
+    return Pitch(
+      step: step,
+      octave: octave,
+      accidental: Accidental.fromVexSuffix(suffix),
+      head: head,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is Pitch &&
+      other.step == step &&
+      other.octave == octave &&
+      other.accidental == accidental &&
+      other.head == head;
+
+  @override
+  int get hashCode => Object.hash(step, octave, accidental, head);
+}
+
 /// Одна нота / аккорд / пауза.
 ///
-/// [keys] — ключи в формате VexFlow: "c/4", аккорд ["c/4","e/4"], а для
-/// ударных — с указанием головки ноты, напр. "g/5/x2" (закрытый хай-хэт).
+/// [pitches] — головки ноты как модель [Pitch] (ступень + октава + знак
+/// альтерации [+ головка для ударных]). Аккорд = несколько [Pitch];
+/// у каждой головки СВОЙ знак (per-notehead — как в профессиональных
+/// редакторах). Пауза — пустой список. Знак НЕ хранится строкой: высота и глиф
+/// строятся из [Pitch] на границе VexFlow ([Pitch.vexKey]).
 /// [duration] — базовая длительность VexFlow: w h q 8 16 32 64 (без 'r').
 /// [dots] — число точек (0 = без точки, 1 = пунктир, 2 = двойной пунктир).
 ///          Модель расширяема; UI пока выставляет 0/1.
@@ -101,7 +253,7 @@ class Tuplet {
 ///          группы (разделяет смежные группы одного соотношения). Влияет на
 ///          реальное время (см. [tupletScale]) — рендер/playback/PDF/reflow.
 class MusicNote {
-  List<String> keys;
+  List<Pitch> pitches;
   String duration;
   int dots;
   bool rest;
@@ -113,7 +265,7 @@ class MusicNote {
   bool tupletStart;
 
   MusicNote({
-    required this.keys,
+    required this.pitches,
     required this.duration,
     this.dots = 0,
     this.rest = false,
@@ -128,8 +280,42 @@ class MusicNote {
   /// Множитель реального времени ноты от tuplet-группы (1.0 вне группы).
   double get tupletScale => tuplet?.scale ?? 1.0;
 
+  /// Ключи VexFlow (проекция головок на границе VexFlow). Удобный string-view
+  /// над каноническим [pitches] — для рендера/движка и string-based кода
+  /// (ударные/тесты). Сеттер пересобирает [pitches] из ключей (миграция).
+  List<String> get keys => pitches.map((p) => p.vexKey).toList();
+  set keys(List<String> v) =>
+      pitches = v.map(Pitch.fromVexKey).toList();
+
+  /// Конструктор из ключей VexFlow (string-based путь: ударные, тесты,
+  /// reflow). Головки разбираются в [Pitch] через [Pitch.fromVexKey].
+  factory MusicNote.fromKeys({
+    required List<String> keys,
+    required String duration,
+    int dots = 0,
+    bool rest = false,
+    bool auto = false,
+    bool tieToNext = false,
+    bool slurStart = false,
+    bool slurStop = false,
+    Tuplet? tuplet,
+    bool tupletStart = false,
+  }) =>
+      MusicNote(
+        pitches: keys.map(Pitch.fromVexKey).toList(),
+        duration: duration,
+        dots: dots,
+        rest: rest,
+        auto: auto,
+        tieToNext: tieToNext,
+        slurStart: slurStart,
+        slurStop: slurStop,
+        tuplet: tuplet,
+        tupletStart: tupletStart,
+      );
+
   MusicNote copy() => MusicNote(
-        keys: List.of(keys),
+        pitches: pitches.map((p) => p.copy()).toList(),
         duration: duration,
         dots: dots,
         rest: rest,
@@ -143,8 +329,8 @@ class MusicNote {
         tupletStart: tupletStart,
       );
 
-  Map<String, dynamic> toJson() => {
-        'keys': keys,
+  /// Поля, общие для persistence-JSON и render-проекции (всё, кроме головок).
+  Map<String, dynamic> _commonJson() => {
         'duration': duration,
         if (dots > 0) 'dots': dots,
         'rest': rest,
@@ -156,8 +342,29 @@ class MusicNote {
         if (tupletStart) 'tupletStart': true,
       };
 
+  /// Persistence-JSON: головки как структурные [Pitch] (round-trip знаков).
+  Map<String, dynamic> toJson() => {
+        'pitches': pitches.map((p) => p.toJson()).toList(),
+        ..._commonJson(),
+      };
+
+  /// Render-проекция для движка (VexFlow): головки как natural-aware ключи
+  /// "f#/4"/"fn/4"/"f/4". Движок строит глиф и считает высоту из ключа +
+  /// тональности + правил такта (единое место — playback-компилятор).
+  Map<String, dynamic> toRenderJson() => {
+        'keys': keys,
+        ..._commonJson(),
+      };
+
   factory MusicNote.fromJson(Map<String, dynamic> j) => MusicNote(
-        keys: (j['keys'] as List).map((e) => e as String).toList(),
+        // Новый формат — 'pitches'; legacy — массив строк 'keys' (миграция).
+        pitches: j['pitches'] != null
+            ? (j['pitches'] as List)
+                .map((e) => Pitch.fromJson(e as Map<String, dynamic>))
+                .toList()
+            : ((j['keys'] as List?) ?? const [])
+                .map((e) => Pitch.fromVexKey(e as String))
+                .toList(),
         duration: j['duration'] as String,
         dots: j['dots'] as int? ?? 0,
         rest: j['rest'] as bool? ?? false,
@@ -193,6 +400,12 @@ class Measure {
   Map<String, dynamic> toJson() => {
         for (final entry in voices.entries)
           entry.key: entry.value.map((n) => n.toJson()).toList(),
+      };
+
+  /// Render-проекция для движка: ноты как natural-aware ключи VexFlow.
+  Map<String, dynamic> toRenderJson() => {
+        for (final entry in voices.entries)
+          entry.key: entry.value.map((n) => n.toRenderJson()).toList(),
       };
 
   factory Measure.fromJson(Map<String, dynamic> j) => Measure({
@@ -311,7 +524,9 @@ class Score {
         'keySignature': keySignature,
         'timeSignature': timeSignature.vex,
         'tempo': tempo,
-        'measures': measures.map((m) => m.toJson()).toList(),
+        // Render-проекция: головки как natural-aware ключи VexFlow (не
+        // структурные pitches) — движок остаётся string-based на границе.
+        'measures': measures.map((m) => m.toRenderJson()).toList(),
         'cursor': cursor.toJson(),
         if (selection != null) 'selection': selection,
       });

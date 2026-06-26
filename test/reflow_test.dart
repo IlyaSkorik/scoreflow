@@ -3,7 +3,7 @@ import 'package:scoreflow/models/reflow.dart';
 import 'package:scoreflow/models/score.dart';
 
 MusicNote n(String dur, {bool rest = false}) =>
-    MusicNote(keys: rest ? const [] : const ['c/4'], duration: dur, rest: rest);
+    MusicNote.fromKeys(keys: rest ? const [] : const ['c/4'], duration: dur, rest: rest);
 
 void main() {
   const cap = 1.0; // 4/4

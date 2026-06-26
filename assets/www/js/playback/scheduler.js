@@ -13,7 +13,6 @@ import { AudioEngine } from '../audio/audio_engine.js';
 import { SampledPiano } from '../audio/sampled_piano.js';
 import { SampledDrums } from '../audio/sampled_drums.js';
 import { drumType } from '../domain/drums.js';
-import { keyToMidi } from '../domain/pitch.js';
 import { compilePlayback } from './compiler.js';
 
 function ensureHighlightLayer() {
@@ -159,8 +158,11 @@ export const Playback = {
                         AudioEngine.playDrum(drumType(e.keys[k]), when, e.velocity);
                 } else {
                     const durS = e.durationBeats * this.secPerQuarter;
-                    for (let k = 0; k < e.keys.length; k++)
-                        AudioEngine.playPiano(keyToMidi(e.keys[k]), when, durS, e.velocity);
+                    // Высота уже разрешена компилятором (тональность + знак +
+                    // правила такта) — играем готовые MIDI-номера головок.
+                    const midis = e.midis || [];
+                    for (let k = 0; k < midis.length; k++)
+                        AudioEngine.playPiano(midis[k], when, durS, e.velocity);
                 }
             }
             this.nextEvent++;

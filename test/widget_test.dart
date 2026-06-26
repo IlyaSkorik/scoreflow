@@ -14,7 +14,7 @@ void main() {
       now: now,
     );
     score.measures.first.voice('treble').add(
-          MusicNote(keys: ['c/4'], duration: 'q'),
+          MusicNote.fromKeys(keys: ['c/4'], duration: 'q'),
         );
 
     final restored = Score.decode(score.encode());
@@ -34,7 +34,7 @@ void main() {
       now: now,
     );
     score.measures.first.voice('treble').add(
-          MusicNote(keys: ['c/4', 'e/4', 'g/4'], duration: 'h'),
+          MusicNote.fromKeys(keys: ['c/4', 'e/4', 'g/4'], duration: 'h'),
         );
     // Многозвучное ударное событие: бочка + крэш одновременно.
     final drums = Score.create(
@@ -44,7 +44,7 @@ void main() {
       now: now,
     );
     drums.measures.first.voice('perc').add(
-          MusicNote(keys: ['f/4', 'a/5/x2'], duration: 'q'),
+          MusicNote.fromKeys(keys: ['f/4', 'a/5/x2'], duration: 'q'),
         );
 
     expect(Score.decode(score.encode()).measures.first.voice('treble').first.keys,

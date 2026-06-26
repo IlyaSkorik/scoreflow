@@ -3,7 +3,7 @@ import 'package:scoreflow/models/palette.dart';
 import 'package:scoreflow/models/reflow.dart';
 import 'package:scoreflow/models/score.dart';
 
-MusicNote n(String dur, {int dots = 0, bool rest = false}) => MusicNote(
+MusicNote n(String dur, {int dots = 0, bool rest = false}) => MusicNote.fromKeys(
       keys: rest ? const [] : const ['c/4'],
       duration: dur,
       dots: dots,

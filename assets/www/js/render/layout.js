@@ -8,11 +8,20 @@
 const REST_KEY = { treble: 'b/4', bass: 'd/3', percussion: 'b/4' };
 
 // --- Разбор ключа VexFlow на букву + акциденталь ("c#/4" -> '#') -----
+// Поддерживает диез/бемоль, дубль-диез/бемоль и бекар ('n'). null — без знака.
 function accidentalOf(key) {
-    const letterAndAcc = key.split('/')[0]; // "c#" / "cb" / "c"
-    const acc = letterAndAcc.substring(1);  // "#", "b", "##", "bb" или ""
-    return (acc === '#' || acc === 'b' || acc === '##' || acc === 'bb')
+    const letterAndAcc = key.split('/')[0]; // "c#" / "cb" / "cn" / "c"
+    const acc = letterAndAcc.substring(1);  // "#","b","##","bb","n" или ""
+    return (acc === '#' || acc === 'b' || acc === '##' || acc === 'bb' || acc === 'n')
         ? acc : null;
+}
+
+// Ключ для StaveNote: бекар ('n') — это натуральная высота (чистая буква),
+// поэтому 'n' из ключа убираем (глиф ♮ рисуется явным модификатором ниже).
+// Диез/бемоль/дубли остаются в ключе (рабочее поведение VexFlow). Головка
+// ударных (3-й сегмент) не затрагивается.
+function vexNoteKey(key) {
+    return key.replace(/^([a-gA-G])n/, '$1');
 }
 
 // --- Построение тиклов одного голоса -------------------------------
@@ -32,13 +41,16 @@ export function buildVoice(VF, notes, clef, beats, beatValue, cursorIdx, measure
             const isRest = !!n.rest;
             const dots = n.dots || 0;
             const dur = isRest ? n.duration + 'r' : n.duration;
-            const keys = isRest ? [REST_KEY[clef]] : n.keys;
+            const rawKeys = isRest ? [REST_KEY[clef]] : n.keys;
+            // Ключи StaveNote: бекар ('n') убираем (натуральная высота), знак
+            // рисуем явным модификатором VF.Accidental ниже из rawKeys.
+            const keys = rawKeys.map(vexNoteKey);
             const sn = new VF.StaveNote({
                 keys: keys, duration: dur, dots: dots,
                 clef: clef, auto_stem: true,
             });
             if (!isRest) {
-                keys.forEach((k, ki) => {
+                rawKeys.forEach((k, ki) => {
                     const acc = accidentalOf(k);
                     if (acc) sn.addModifier(new VF.Accidental(acc), ki);
                 });
