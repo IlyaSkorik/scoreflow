@@ -3,7 +3,7 @@
 > Single source of truth for the project's state. Completed items are verified
 > against the actual codebase, not aspirations.
 >
-> Last reviewed: 2026-06-24 · Flutter + Material 3 · VexFlow 4.2.2 in WebView.
+> Last reviewed: 2026-06-27 · Flutter + Material 3 · VexFlow 4.2.2 in WebView.
 
 ## Vision
 
@@ -55,6 +55,7 @@ print-grade output (clean A4 PDF, no clipped bars). Primary focus: keyboard
 - [x] Partial ligature arcs across row/system breaks
 - [x] Key signature & time signature (incl. custom meters)
 - [x] **Accidentals** (♯ ♭ ♮ 𝄪 𝄫 — dedicated `Accidental`/`Pitch` model, per-notehead; editor tool, rendering, PDF; **playback pitch resolved once** = key signature + accidental + measure rules: carry-to-end-of-measure, per step+octave, natural cancels, auto-reset next measure; extensible to microtones)
+- [x] **Dynamics** (ppp pp p mp mf f ff fff — dedicated `DynamicMark`/`Dynamic` model, notation object on a rhythmic position **not** a note property; editor tool (piano + drums), rendering below staff via SMuFL glyphs, PDF; **playback loudness resolved once** in the compiler = active dynamic → per-event velocity, persists until the next mark, per-voice, reflow-preserving by absolute beat; architecture extensible to sfz/fp/rfz and hairpins without redesign)
 
 ### Playback
 - [x] Audio Engine (Web Audio, look-ahead scheduler, "two clocks")
@@ -88,8 +89,8 @@ _Nothing in active development right now._
 ### High Priority
 - [ ] Copy / Paste measures
 - [ ] Multi-selection
-- [ ] Dynamics (pp, p, mp, mf, f, ff)
-- [ ] Crescendo / Diminuendo
+- [ ] Crescendo / Diminuendo (hairpins) — _reuses the dynamics layer: positional anchors + per-event velocity ramp in the compiler_
+- [ ] Expressive dynamics (sfz, fp, rfz) — _new `DynamicMark` values; model/compiler/render already extensible_
 
 ### Medium Priority
 - [ ] Slur playback (legato shaping) — _rendering/model already done_
@@ -113,7 +114,7 @@ _Nothing in active development right now._
       approximate; ties/slurs are drawn inside the measure's scale transform
 - [ ] Playback profiling (scheduler under dense scores)
 - [ ] Large score optimization (layout passes scale with measure count)
-- [ ] Broader JS-side test harness (node ESM test exists for the pitch resolver — `test/js/accidental_resolver.test.mjs`; wider engine coverage still TBD, not wired into `flutter test`)
+- [ ] Broader JS-side test harness (node ESM tests exist for the pitch resolver — `test/js/accidental_resolver.test.mjs` — and the dynamics/velocity resolver — `test/js/dynamics_resolver.test.mjs`; wider engine coverage still TBD, not wired into `flutter test`)
 
 ---
 

@@ -8,6 +8,7 @@ import { state } from '../utils/state.js';
 import { el, showError } from '../utils/dom.js';
 import { buildVoice, beamGroups, buildTuplets, measureMinWidth } from './layout.js';
 import { drawTiesAndSlurs } from './ligatures.js';
+import { drawScreenDynamics } from './dynamics.js';
 import { drawSelectionHighlight, keepCursorInView, attachTapListener } from './geometry.js';
 import { Playback } from '../playback/scheduler.js';
 
@@ -35,6 +36,10 @@ export function render(score, forcedWidth) {
     state.noteHits = [];
     state.noteObjs = {};
     state.noteTransform = {};
+    // Линейки стана каждого голоса по такту — для размещения оттенков ПОД
+    // станом (нижняя) и потолка под grand staff (верхняя). Ключ "mi:voice".
+    state.staffBottomY = {};
+    state.staffTopY = {};
 
     const container = el('notation-container');
     const width = forcedWidth || Math.max(320, container.clientWidth);
@@ -53,8 +58,14 @@ export function render(score, forcedWidth) {
     // не влезает; тогда оно равномерно по всем тактам строки.
     const margin = 8;
     const usableW = width - 2 * margin;
-    const rowH = isDrums ? 130 : 200;
-    const bassDY = 90;
+    // Высота системы и расстояние между станами grand staff АДАПТИВНЫ: берём
+    // измеренные величины (см. computeDesiredSpacing в конце render) — раздвигаем
+    // станы под низкие ноты/длинные штили и динамику, чтобы не было наложений.
+    const sp = state.dynSpacing;
+    const rowH = isDrums
+        ? (sp && sp.rowHDrums) || 130
+        : (sp && sp.rowHGrand) || 200;
+    const bassDY = (sp && sp.bassDY) || 90;
     const INNER_PAD = 12; // правый запас (дыхание) в нотной зоне такта
     const voiceList = isDrums ? ['perc'] : ['treble', 'bass'];
     const clefList = isDrums ? ['percussion'] : ['treble', 'bass'];
@@ -198,6 +209,11 @@ export function render(score, forcedWidth) {
         state.noteHitIndex[state.noteHits[h].id] = state.noteHits[h];
     }
 
+    // Динамические оттенки — отдельным проходом ПОСЛЕ нот (нужны X нот из
+    // noteHitIndex и базовые линии станов).
+    try { drawScreenDynamics(VF, ctx, score); }
+    catch (err) { console.error('drawScreenDynamics failed:', err); }
+
     // Подсветка выделения при наборе лиги фразировки (slur).
     drawSelectionHighlight(score.selection);
 
@@ -217,6 +233,96 @@ export function render(score, forcedWidth) {
     if (!Playback.isPlaying()) keepCursorInView(cursor, prevScrollY);
 
     attachTapListener();
+
+    // Адаптивная вертикальная вёрстка: по РЕАЛЬНЫМ высотам нот (bbox относительно
+    // линеек стана — величины НЕ зависят от вертикального сдвига, поэтому
+    // сходится за один повторный проход) и наличию оттенков считаем нужные
+    // bassDY/rowH. Если отличаются от текущих — обновляем и перерисовываем.
+    // Этот же повторный рендер «прогревает» метрики (чинит съезд оттенков на
+    // первом кадре). Расхождений нет -> второй рендер не назначается.
+    if (!forcedWidth && state.lastPayload &&
+        typeof requestAnimationFrame === 'function') {
+        const desired = computeDesiredSpacing(score, isDrums);
+        const cur = state.dynSpacing;
+        const changed = !cur ||
+            cur.bassDY !== desired.bassDY ||
+            cur.rowHGrand !== desired.rowHGrand ||
+            cur.rowHDrums !== desired.rowHDrums;
+        if (changed) {
+            state.dynSpacing = desired;
+            scheduleRerender();
+        }
+    }
+}
+
+// Двойной rAF: повторный рендер ПОСЛЕ реальной отрисовки кадра (прогрев метрик
+// + применение новой вёрстки). Защита от наложения повторных назначений.
+let _rerenderPending = false;
+function scheduleRerender() {
+    if (_rerenderPending) return;
+    _rerenderPending = true;
+    requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+            _rerenderPending = false;
+            try { render(state.lastPayload); } catch (e) { /* no-op */ }
+        });
+    });
+}
+
+// Нужные отступы системы из РЕАЛЬНЫХ высот нот и наличия оттенков. Меряем,
+// насколько содержимое выходит за линейки стана (вниз у верхнего голоса/перка,
+// вверх и вниз у баса) — это инвариантно вертикальному сдвигу, поэтому величины
+// стабильны и проход сходится. Возвращает { bassDY, rowHGrand, rowHDrums }.
+function computeDesiredSpacing(score, isDrums) {
+    let trebleBelow = 0, bassAbove = 0, bassBelow = 0, percBelow = 0;
+    const hits = state.noteHits || [];
+    for (let i = 0; i < hits.length; i++) {
+        const h = hits[i];
+        const sb = state.staffBottomY[h.m + ':' + h.v];
+        const st = state.staffTopY[h.m + ':' + h.v];
+        const bottom = h.y + h.h, top = h.y;
+        if (h.v === 'treble') {
+            if (sb != null && bottom - sb > trebleBelow) trebleBelow = bottom - sb;
+        } else if (h.v === 'bass') {
+            if (st != null && st - top > bassAbove) bassAbove = st - top;
+            if (sb != null && bottom - sb > bassBelow) bassBelow = bottom - sb;
+        } else if (h.v === 'perc') {
+            if (sb != null && bottom - sb > percBelow) percBelow = bottom - sb;
+        }
+    }
+    if (trebleBelow < 0) trebleBelow = 0;
+    if (bassAbove < 0) bassAbove = 0;
+    if (bassBelow < 0) bassBelow = 0;
+    if (percBelow < 0) percBelow = 0;
+
+    // Наличие оттенков по голосам (резервируем место под глиф).
+    let tDyn = false, bDyn = false, pDyn = false;
+    const ms = (score && score.measures) || [];
+    for (let i = 0; i < ms.length; i++) {
+        const d = ms[i] && ms[i]._dyn;
+        if (!d) continue;
+        if (d.treble && d.treble.length) tDyn = true;
+        if (d.bass && d.bass.length) bDyn = true;
+        if (d.perc && d.perc.length) pDyn = true;
+    }
+    // Сдвиг базовой линии оттенка от нижней линейки стана (как в dynamics_layout:
+    // max(STAFF_GAP, ниже самой низкой ноты + NOTE_CLEAR)).
+    const dynOffset = function (below, has) {
+        return has ? Math.max(16, below + 11) : below;
+    };
+
+    if (isDrums) {
+        const rowHDrums = Math.round(Math.max(130,
+            60 + dynOffset(percBelow, pDyn) + 50));
+        return { bassDY: 90, rowHGrand: 200, rowHDrums: rowHDrums };
+    }
+    // bassDY: между нижней линейкой treble и верхней линейкой bass должно
+    // помещаться treble-снизу (или оттенок treble) + bass-сверху + зазор.
+    const bassDY = Math.round(Math.max(90,
+        40 + dynOffset(trebleBelow, tDyn) + bassAbove + (tDyn ? 10 : 6)));
+    const rowHGrand = Math.round(Math.max(200,
+        bassDY + 40 + dynOffset(bassBelow, bDyn) + 24));
+    return { bassDY: bassDY, rowHGrand: rowHGrand, rowHDrums: 130 };
 }
 
 function formatAndDraw(VF, ctx, voices, staves, measureW, rowStart, isFirst, beats, beatValue) {
@@ -250,6 +356,16 @@ function formatAndDraw(VF, ctx, voices, staves, measureW, rowStart, isFirst, bea
 
     const groups = beamGroups(VF, beats, beatValue);
     voices.forEach((v, idx) => {
+        // Базовая линия стана голоса (нижняя линейка) — якорь для оттенков под
+        // станом. Берём из первой тиклы (m/v) и геометрии стана (Y не сжимается).
+        const tk0 = v.getTickables();
+        if (tk0.length && tk0[0].__hit) {
+            const h0 = tk0[0].__hit;
+            try {
+                state.staffBottomY[h0.m + ':' + h0.v] = staves[idx].getYForLine(4);
+                state.staffTopY[h0.m + ':' + h0.v] = staves[idx].getYForLine(0);
+            } catch (e) { /* нет стана — пропуск */ }
+        }
         // Балки создаём ДО отрисовки нот: generateBeams помечает ноты
         // как забимованные, и тогда v.draw не рисует им одиночные флажки.
         const beams = VF.Beam.generateBeams(v.getTickables(), {

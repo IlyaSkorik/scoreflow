@@ -7,6 +7,51 @@ import 'score.dart';
 double noteTime(MusicNote n) =>
     noteFraction(n.duration, n.dots) * n.tupletScale;
 
+/// Доля (в ЧЕТВЕРТЯХ) от начала такта до ноты с индексом [index] — реальное
+/// смещение онсета с учётом точек/tuplet. Единица совпадает со startBeat
+/// playback-компилятора (четверти), поэтому к этому значению привязываются
+/// динамические оттенки ([Dynamic.beat]).
+double onsetBeats(List<MusicNote> notes, int index) {
+  var q = 0.0;
+  final n = index < notes.length ? index : notes.length;
+  for (var i = 0; i < n; i++) {
+    q += noteTime(notes[i]) * 4; // доля от целой -> четверти
+  }
+  return q;
+}
+
+/// Перепривязывает динамические оттенки к НОВОЙ раскладке тактов по АБСОЛЮТНОЙ
+/// доле, сохраняя их музыкальную позицию при reflow (как в проф. редакторах:
+/// оттенок остаётся на своей доле, даже если ноты переехали в другой такт).
+///
+/// [from] — такты ДО перепаковки (источник оттенков и их абсолютных позиций),
+/// [to] — НОВЫЕ такты (их списки оттенков очищаются и заполняются заново).
+/// [measureQ] — четвертей в такте (beats·4/beatValue). Один оттенок на
+/// (голос+доля): совпадающие по доле схлопываются (побеждает последний).
+void reflowDynamics(
+    List<Measure> from, List<Measure> to, double measureQ) {
+  for (final m in to) {
+    m.dynamics.clear();
+  }
+  if (measureQ <= 0 || to.isEmpty) return;
+  for (var mi = 0; mi < from.length; mi++) {
+    final base = mi * measureQ;
+    from[mi].dynamics.forEach((voice, list) {
+      for (final d in list) {
+        final abs = base + d.beat;
+        var idx = (abs / measureQ + 1e-9).floor();
+        if (idx < 0) idx = 0;
+        if (idx >= to.length) idx = to.length - 1;
+        final local = abs - idx * measureQ;
+        final dest = to[idx].dynamicsOf(voice);
+        dest.removeWhere((e) => (e.beat - local).abs() < 1e-6);
+        dest.add(Dynamic(mark: d.mark, voice: voice, beat: local));
+        dest.sort((a, b) => a.beat.compareTo(b.beat));
+      }
+    });
+  }
+}
+
 /// Разбивает поток нот одного голоса на «чанки» — неделимые при раскладке
 /// единицы: одиночная нота вне tuplet, либо ЦЕЛАЯ tuplet-группа. Группа —
 /// непрерывный ряд нот с одинаковым соотношением, начинающийся с [tupletStart].

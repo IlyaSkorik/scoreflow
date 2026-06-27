@@ -11,8 +11,12 @@
 // из layout.js — print НЕ зависит от экранного render.js. VF берётся из
 // глобального Vex.Flow (как и в остальном движке).
 import { el } from '../utils/dom.js';
+import { state } from '../utils/state.js';
 import { buildVoice, beamGroups, buildTuplets, measureMinWidth } from './layout.js';
 import { voiceListOf, nextRealNote, sameKeys } from '../domain/notes.js';
+import { drawDynamic } from './dynamics.js';
+import { dynamicsBaseline } from './dynamics_layout.js';
+import { noteOnsets, indexAtBeat } from '../domain/dynamics.js';
 
 const PAGE = { W: 794, H: 1123, mx: 56, mtop: 72, mbot: 56 }; // A4 @96dpi
 const MEASURE_PAD = 16;    // правый запас в такте (дыхание/барлайн)
@@ -23,24 +27,31 @@ const NOTE_RIGHT_PAD = 10; // запас справа от последней н
 function printW() { return PAGE.W - 2 * PAGE.mx; }
 function printH() { return PAGE.H - PAGE.mtop - PAGE.mbot; }
 
-// Конфигурация станов под инструмент.
+// Конфигурация станов под инструмент. Вертикальные отступы РАСШИРЯЮТСЯ ровно на
+// столько, на сколько их раздвинул адаптивный экранный рендер (state.dynSpacing),
+// — так PDF повторяет экран (станы раздвинуты под высоты нот и динамику). Без
+// предварительного экранного рендера берём тюнингованные значения по умолчанию.
 function layoutConfig(instrument) {
+    const sp = state.dynSpacing;
     if (instrument === 'drums') {
+        const extra = sp ? Math.max(0, sp.rowHDrums - 130) : 0;
         return {
             grand: false,
             staves: [{ voice: 'perc', clef: 'percussion', dy: 0 }],
             keySig: false,
-            systemHeight: 96,
+            systemHeight: 96 + extra,
         };
     }
+    const extraGap = sp ? Math.max(0, sp.bassDY - 90) : 0;
+    const extraSys = sp ? Math.max(0, sp.rowHGrand - 200) : 0;
     return {
         grand: true,
         staves: [
             { voice: 'treble', clef: 'treble', dy: 0 },
-            { voice: 'bass', clef: 'bass', dy: 82 },
+            { voice: 'bass', clef: 'bass', dy: 82 + extraGap },
         ],
         keySig: true,
-        systemHeight: 172,
+        systemHeight: 172 + extraSys,
     };
 }
 
@@ -88,7 +99,7 @@ function drawTitle(ctx, title, composer) {
 // номер системы, [registry] — реестр noteId -> {sn, ctx, sys} для
 // последующего прохода лиг (Tie/Slur), общий на всю печать.
 function drawSystem(VF, ctx, sys, measures, cfg, yTop, beats, beatValue,
-                    keySig, timeSig, sysIndex, registry) {
+                    keySig, timeSig, sysIndex, registry, staveReg) {
     let x = PAGE.mx;
     sys.items.forEach(function (idx, pos) {
         const isFirst = (pos === 0);
@@ -115,6 +126,15 @@ function drawSystem(VF, ctx, sys, measures, cfg, yTop, beats, beatValue,
             stave.format();
             return stave;
         });
+
+        // Реестр станов такта (для прохода оттенков): "mi:voice" ->
+        // {stave, ctx, sys}. sys группирует такты одной системы (общая база).
+        if (staveReg) {
+            cfg.staves.forEach(function (st, si) {
+                staveReg[idx + ':' + st.voice] =
+                    { stave: staves[si], ctx: ctx, sys: sysIndex };
+            });
+        }
 
         // Единый старт нот по всем станам системы (вертикальное выравнивание).
         let startX = x;
@@ -263,6 +283,8 @@ export function renderPrintPages(score) {
     // ctx) — лига внутри системы рисуется целиком, между системами —
     // частичными дугами на соответствующих ctx.
     const printObjs = {};
+    // Реестр станов "mi:voice" -> {stave, ctx} — нужен проходу оттенков.
+    const printStaves = {};
     let sysGi = 0;
 
     for (let p = 0; p < pages.length; p++) {
@@ -289,7 +311,7 @@ export function renderPrintPages(score) {
         let y = PAGE.mtop + headOffset;
         for (let k = 0; k < n; k++) {
             drawSystem(VF, ctx, pageSystems[k], measures, cfg, y,
-                beats, beatValue, keySig, timeSig, sysGi, printObjs);
+                beats, beatValue, keySig, timeSig, sysGi, printObjs, printStaves);
             sysGi++;
             y += sysH + gap;
         }
@@ -299,7 +321,78 @@ export function renderPrintPages(score) {
     try { drawPrintTiesAndSlurs(VF, score, printObjs); }
     catch (err) { console.error('drawPrintTiesAndSlurs failed:', err); }
 
+    // Динамические оттенки — отдельным проходом (позиции нот и станы готовы).
+    try { drawPrintDynamics(VF, score, printObjs, printStaves); }
+    catch (err) { console.error('drawPrintDynamics failed:', err); }
+
     return pages.length;
+}
+
+// Проход оттенков для печати — ТОТ ЖЕ алгоритм, что на экране (dynamicsBaseline):
+// одна базовая линия на (система+голос), под нотами, без столкновений. Геометрию
+// берём из VF (StaveNote.getBoundingBox / Stave.getYForLine), позицию СЧИТАЕТ
+// общий слой — поэтому PDF и экран совпадают.
+function drawPrintDynamics(VF, score, registry, staveReg) {
+    const measures = score.measures || [];
+    const voices = voiceListOf(score);
+
+    // --- 1. Линейки станов по группе "sys:voice" (система — на одной странице,
+    //         поэтому координаты/ctx согласованы внутри группы) ---
+    const staffBot = {}, staffTop = {};
+    for (const k in staveReg) {
+        const sr = staveReg[k];
+        const gk = sr.sys + ':' + k.split(':')[1];
+        if (staffBot[gk] != null) continue;
+        try {
+            staffBot[gk] = sr.stave.getYForLine(4);
+            staffTop[gk] = sr.stave.getYForLine(0);
+        } catch (e) { /* нет стана — пропуск */ }
+    }
+
+    // --- 2. Низы bbox ВСЕХ нот группы (для согласованной базы) ---
+    const bottoms = {};
+    for (const id in registry) {
+        const o = registry[id];
+        if (!o || !o.sn) continue;
+        const gk = o.sys + ':' + id.split(':')[1];
+        let bb;
+        try { bb = o.sn.getBoundingBox(); } catch (e) { continue; }
+        if (!bb) continue;
+        (bottoms[gk] || (bottoms[gk] = [])).push(bb.getY() + bb.getH());
+    }
+
+    // --- 3. Базовая линия группы (treble grand staff: потолок = верх bass) ---
+    const baseline = {};
+    for (const gk in staffBot) {
+        const parts = gk.split(':');
+        const cap = (parts[1] === 'treble') ? staffTop[parts[0] + ':bass'] : null;
+        baseline[gk] = dynamicsBaseline(staffBot[gk], bottoms[gk], cap);
+    }
+
+    // --- 4. Отрисовка: глиф по центру ноты на базовой линии группы ---
+    for (let mi = 0; mi < measures.length; mi++) {
+        const dynAll = measures[mi] && measures[mi]._dyn;
+        if (!dynAll) continue;
+        for (let vi = 0; vi < voices.length; vi++) {
+            const v = voices[vi];
+            const list = dynAll[v];
+            if (!list || !list.length) continue;
+            const sr = staveReg[mi + ':' + v];
+            if (!sr) continue;
+            const y = baseline[sr.sys + ':' + v];
+            if (y == null) continue;
+            const onsets = noteOnsets((measures[mi] && measures[mi][v]) || []);
+            for (let k = 0; k < list.length; k++) {
+                const d = list[k];
+                const idx = indexAtBeat(onsets, d.beat || 0);
+                const obj = registry[mi + ':' + v + ':' + (idx >= 0 ? idx : 0)];
+                if (!obj || !obj.sn) continue;
+                let x;
+                try { x = obj.sn.getAbsoluteX(); } catch (e) { continue; }
+                drawDynamic(VF, sr.ctx, x, y, d.mark);
+            }
+        }
+    }
 }
 
 // Проход лиг для печати: как drawTiesAndSlurs, но ctx у каждой ноты свой

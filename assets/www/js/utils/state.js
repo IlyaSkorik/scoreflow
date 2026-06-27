@@ -7,4 +7,11 @@ export const state = {
   noteHitIndex: {},    // noteId ("m:v:i") -> bbox (playhead/подсветка)
   noteObjs: {},        // noteId -> VF.StaveNote (для отрисовки лиг Tie/Slur)
   noteTransform: {},   // noteId -> {tx, sx} горизонт. сжатие такта (для лиг)
+  staffBottomY: {},    // "mi:voice" -> Y нижней линейки стана (для оттенков)
+  staffTopY: {},       // "mi:voice" -> Y верхней линейки стана (потолок оттенков)
+  // Адаптивная вертикальная вёрстка системы: { bassDY, rowHGrand, rowHDrums }
+  // или null. Считается из реальных высот нот и наличия оттенков, чтобы
+  // grand staff раздвигался и динамика не сталкивалась с нотами. Экран и PDF
+  // берут эти же величины -> одинаковые отступы.
+  dynSpacing: null,
 };

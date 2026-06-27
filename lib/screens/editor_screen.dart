@@ -250,6 +250,10 @@ class _EditorScreenState extends State<EditorScreen> {
         }
       }
     }
+    // Оттенки переезжают вместе с музыкой: перепривязка по абсолютной доле к
+    // новой раскладке (measureQ в четвертях = capacity·4). Делаем ДО подмены
+    // s.measures — источник позиций — прежняя раскладка.
+    reflowDynamics(s.measures, measures, cap * 4);
     s.measures = measures;
 
     // вернуть курсор на ту же ноту (или подровнять в границы)
@@ -462,6 +466,50 @@ class _EditorScreenState extends State<EditorScreen> {
     final note = _activeVoice[_cursor.index];
     _commit(() {
       note.pitches = note.pitches.map((p) => p.withAccidental(acc)).toList();
+    });
+  }
+
+  // --- Динамика (Dynamic) ----------------------------------------------
+
+  /// Оттенок можно поставить, когда курсор стоит на реальном слоте (ноте или
+  /// паузе) — оттенок привязывается к его доле. Применимо к пиано и ударным.
+  bool get _canDynamic =>
+      _cursor.index >= 0 && _cursor.index < _activeVoice.length;
+
+  /// Оттенок, стоящий на доле ноты под курсором (для подсветки активной кнопки),
+  /// либо null.
+  DynamicMark? get _cursorDynamic {
+    if (!_canDynamic) return null;
+    final beat = onsetBeats(_activeVoice, _cursor.index);
+    for (final d in _score!.measures[_cursor.measure].dynamicsOf(_cursor.voice)) {
+      if ((d.beat - beat).abs() < 1e-6) return d.mark;
+    }
+    return null;
+  }
+
+  /// Инструмент «Динамика»: ставит оттенок [mark] на долю ноты под курсором.
+  /// Повторный тап того же знака — снимает (toggle); другой знак — заменяет.
+  /// Оттенок — нотационный объект на ритмической позиции (НЕ свойство ноты);
+  /// действует на все последующие ноты голоса до следующего оттенка (разрешение
+  /// громкости — в playback-компиляторе движка). Идёт через обычный пайплайн
+  /// (_commit -> normalize -> render -> persist -> Undo/Redo).
+  void _setDynamic(DynamicMark mark) {
+    if (!_canDynamic) return;
+    _commit(() {
+      final beat = onsetBeats(_activeVoice, _cursor.index);
+      final list = _score!.measures[_cursor.measure].dynamicsOf(_cursor.voice);
+      final at = list.indexWhere((d) => (d.beat - beat).abs() < 1e-6);
+      if (at >= 0) {
+        if (list[at].mark == mark) {
+          list.removeAt(at); // повторный тот же знак — снять
+        } else {
+          list[at] = Dynamic(mark: mark, voice: _cursor.voice, beat: beat);
+        }
+      } else {
+        list
+          ..add(Dynamic(mark: mark, voice: _cursor.voice, beat: beat))
+          ..sort((a, b) => a.beat.compareTo(b.beat));
+      }
     });
   }
 
@@ -1004,6 +1052,8 @@ class _EditorScreenState extends State<EditorScreen> {
                 _cursorOnNote && _activeVoice[_cursor.index].tuplet != null,
             canLiga: _cursorOnNote,
             cursorAccidental: _cursorAccidental,
+            canDynamic: _canDynamic,
+            cursorDynamic: _cursorDynamic,
             filledBeats: filledBeats,
             totalBeats: totalBeats,
             onDuration: (d) => setState(() => _duration = d),
@@ -1013,6 +1063,7 @@ class _EditorScreenState extends State<EditorScreen> {
             onToggleSlur: _toggleSlur,
             onTuplet: _onTuplet,
             onAccidental: _setAccidental,
+            onDynamic: _setDynamic,
             onInsert: (keys) => _insertNote(keys: keys),
             onRest: () => _insertNote(keys: const [], rest: true),
             onDelete: _deleteAtCursor,
@@ -1054,6 +1105,8 @@ class _EditorPanel extends StatelessWidget {
   final bool tupletOnCursor; // нота под курсором входит в tuplet-группу
   final bool canLiga; // курсор на реальной ноте — лиги/tuplet применимы
   final Accidental? cursorAccidental; // знак ноты под курсором (для подсветки)
+  final bool canDynamic; // курсор на слоте — оттенок применим
+  final DynamicMark? cursorDynamic; // оттенок на доле ноты под курсором
   final double filledBeats;
   final int totalBeats;
   final ValueChanged<String> onDuration;
@@ -1063,6 +1116,7 @@ class _EditorPanel extends StatelessWidget {
   final VoidCallback onToggleSlur;
   final VoidCallback onTuplet;
   final ValueChanged<Accidental> onAccidental;
+  final ValueChanged<DynamicMark> onDynamic;
   final ValueChanged<List<String>> onInsert;
   final VoidCallback onRest;
   final VoidCallback onDelete;
@@ -1080,6 +1134,8 @@ class _EditorPanel extends StatelessWidget {
     required this.tupletOnCursor,
     required this.canLiga,
     required this.cursorAccidental,
+    required this.canDynamic,
+    required this.cursorDynamic,
     required this.filledBeats,
     required this.totalBeats,
     required this.onDuration,
@@ -1089,6 +1145,7 @@ class _EditorPanel extends StatelessWidget {
     required this.onToggleSlur,
     required this.onTuplet,
     required this.onAccidental,
+    required this.onDynamic,
     required this.onInsert,
     required this.onRest,
     required this.onDelete,
@@ -1119,6 +1176,9 @@ class _EditorPanel extends StatelessWidget {
                 const SizedBox(height: 6),
                 _accidentalRow(context),
               ],
+              // Зона 2в — динамика (оба инструмента)
+              const SizedBox(height: 6),
+              _dynamicsRow(context),
               const SizedBox(height: 8),
               // Зона 3 — ввод высоты/инструмента (вся ширина, зона большого пальца)
               SizedBox(
@@ -1393,6 +1453,53 @@ class _EditorPanel extends StatelessWidget {
                       message: tip,
                       child: Text(glyph, style: const TextStyle(fontSize: 18)),
                     ),
+                  ),
+                );
+              }(),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Зона динамики: ставит оттенок (ppp..fff) на долю ноты под курсором.
+  /// Оттенок действует до следующего знака; громкость воспроизведения движок
+  /// разрешает сам. Активный оттенок подсвечен; повторный тап — снимает.
+  Widget _dynamicsRow(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(right: 6, left: 2),
+            child: Text('Динам.',
+                style: Theme.of(context).textTheme.labelMedium),
+          ),
+          for (final mark in DynamicMark.values)
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: () {
+                final active = cursorDynamic == mark;
+                return SizedBox(
+                  height: 38,
+                  child: TextButton(
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      minimumSize: const Size(38, 38),
+                      backgroundColor:
+                          active ? scheme.secondaryContainer : null,
+                      foregroundColor: active
+                          ? scheme.onSecondaryContainer
+                          : scheme.onSurface,
+                    ),
+                    onPressed: canDynamic ? () => onDynamic(mark) : null,
+                    child: Text(mark.label,
+                        style: const TextStyle(
+                            fontSize: 16,
+                            fontStyle: FontStyle.italic,
+                            fontWeight: FontWeight.bold)),
                   ),
                 );
               }(),

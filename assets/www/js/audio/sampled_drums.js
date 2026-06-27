@@ -5,6 +5,8 @@
 // открытый хай-хэт при закрытом/педальном ударе. Тембр — в самих
 // сэмплах (никакого синтеза) → нет эффекта «драм-машины».
 // Сэмплы кладёт tools/fetch_drums.mjs; раздаются локальным сервером.
+import { velocityGain } from './velocity.js';
+
 export const SampledDrums = {
     ctx: null, master: null,
     ready: false, loading: false,
@@ -98,6 +100,7 @@ export const SampledDrums = {
     noteOn: function (type, when, velocity) {
         const ctx = this.ctx; if (!ctx || !this.ready) return false;
         const inst = this.kit[type]; if (!inst) return false;
+        // Выбор velocity-СЛОЯ сэмпла — по целочисленной velocity 1..127.
         const vel = Math.max(1, Math.min(127,
             Math.round((velocity == null ? 0.78 : velocity) * 127)));
         const L = this._pickLayer(inst, vel); if (!L || !L.buffer) return false;
@@ -109,7 +112,8 @@ export const SampledDrums = {
         const src = ctx.createBufferSource();
         src.buffer = L.buffer;
         const g = ctx.createGain();
-        g.gain.value = 0.35 + 0.65 * (vel / 127); // громкость по velocity
+        // Громкость — из СЫРОЙ float-velocity по общей кривой (ff != fff!).
+        g.gain.value = Math.min(1.0, velocityGain(velocity, 0.92));
         src.connect(g); g.connect(this.master);
         src.start(when);                          // хвост звучит ЦЕЛИКОМ
         const voice = { src: src, g: g, group: inst.group, choked: false, dead: false };

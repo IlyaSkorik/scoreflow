@@ -1,5 +1,6 @@
 import { SampledPiano } from './sampled_piano.js';
 import { SampledDrums } from './sampled_drums.js';
+import { velocityGain } from './velocity.js';
 
 // --- AudioEngine (Web Audio API, полностью оффлайн) ----------------
 export const AudioEngine = {
@@ -44,7 +45,6 @@ export const AudioEngine = {
     playPitch: function (freq, when, durSec, velocity) {
         const ctx = this.ctx; if (!ctx) return;
         const dur = Math.max(0.08, durSec);
-        const vel = velocity == null ? 0.8 : velocity;
         const g = ctx.createGain();
         const lp = ctx.createBiquadFilter();
         lp.type = 'lowpass';
@@ -54,7 +54,8 @@ export const AudioEngine = {
         const g2 = ctx.createGain(); g2.gain.value = 0.35; // обертон
         o1.connect(g); o2.connect(g2); g2.connect(g);
         g.connect(lp); lp.connect(this.master);
-        const peak = 0.28 * vel;
+        // Пик ADSR — по общей velocity-кривой (peak ff = 0.34; fff чуть выше).
+        const peak = velocityGain(velocity, 0.34);
         const end = when + dur;
         g.gain.setValueAtTime(0.0001, when);
         g.gain.exponentialRampToValueAtTime(peak, when + 0.008);
@@ -74,7 +75,10 @@ export const AudioEngine = {
     // velocity масштабирует громкость.
     _synthDrum: function (type, when, velocity) {
         const ctx = this.ctx; if (!ctx) return;
-        const vel = velocity == null ? 0.78 : velocity;
+        // Множитель громкости по общей velocity-кривой (как у сэмплов): все
+        // частные gain'ы партий масштабируются им, поэтому pp/mf/ff/fff звучат
+        // явно по-разному и в синтез-fallback.
+        const vel = velocityGain(velocity, 1.0);
         if (type === 'kick') {
             const o = ctx.createOscillator(); const g = ctx.createGain();
             o.type = 'sine';

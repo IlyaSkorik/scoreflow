@@ -6,6 +6,7 @@ import { tupletScaleOf } from '../domain/tuplets.js';
 import { sameKeys } from '../domain/notes.js';
 import { resolveMidi } from '../domain/pitch.js';
 import { keySignatureAlterations } from '../domain/keysig.js';
+import { dynamicsTimeline, velocityAt } from '../domain/dynamics.js';
 
 // Tie-merge для playback: внутри каждого голоса (события уже в порядке
 // времени) поглощаем цепочку лиг длительности в одно событие — один
@@ -55,6 +56,14 @@ export function compilePlayback(payload) {
     // Альтерации тональности (ступень -> сдвиг) — одна из трёх составляющих
     // реальной высоты. Для ударных высота не считается.
     const keyAlt = isDrums ? {} : keySignatureAlterations(payload.keySignature || 'C');
+    // Громкость каждого события РАЗРЕШАЕТСЯ ОДИН РАЗ из динамических оттенков:
+    // на голос строим таймлайн оттенков (абсолютные четверти -> velocity), и
+    // каждому событию ставим активную громкость на его startBeat. AudioEngine
+    // получает готовый velocity — без повторных расчётов и без оттенков на ноте.
+    const timelines = {};
+    for (let vi = 0; vi < voiceIds.length; vi++) {
+        timelines[voiceIds[vi]] = dynamicsTimeline(measures, voiceIds[vi], measureQ);
+    }
     let events = [];
 
     for (let mi = 0; mi < measures.length; mi++) {
@@ -101,9 +110,10 @@ export function compilePlayback(payload) {
                     // звучащее событие на merge-проходе ниже.
                     tieToNext: !!n.tieToNext,
                     coveredNoteIds: [], // ноты-продолжения цепочки лиг
-                    // Громкость ноты (0..1). Сейчас по умолчанию mf;
-                    // позже сюда проецируются динамические оттенки.
-                    velocity: n.velocity != null ? n.velocity : 0.78,
+                    // Громкость (0..1) разрешена ОДИН РАЗ из активного оттенка
+                    // голоса на эту долю (mf, если оттенков нет). При tie-merge
+                    // событие-голова сохраняет свой velocity (атака — одна).
+                    velocity: velocityAt(timelines[v], base + acc),
                 });
                 acc += q;
             }

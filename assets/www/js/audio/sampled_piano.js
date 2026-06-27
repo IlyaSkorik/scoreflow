@@ -5,6 +5,8 @@
 // Поддерживает velocity-слои, демпфер-педаль (sustain) и release-хвост.
 // Сэмплы (Salamander Grand Piano, CC-BY) кладёт tools/fetch_salamander.mjs;
 // раздаются локальным сервером — в рантайме сети нет.
+import { velocityGain } from './velocity.js';
+
 export const SampledPiano = {
     ctx: null, master: null,
     ready: false, loading: false,
@@ -88,6 +90,7 @@ export const SampledPiano = {
     // тогда вызывающий уходит в синтез-fallback.
     noteOn: function (midi, when, durSec, velocity) {
         const ctx = this.ctx; if (!ctx || !this.ready) return false;
+        // Выбор velocity-СЛОЯ сэмпла — по целочисленной velocity 1..127.
         const vel = Math.max(1, Math.min(127,
             Math.round((velocity == null ? 0.78 : velocity) * 127)));
         const z = this._pick(midi, vel); if (!z) return false;
@@ -98,7 +101,9 @@ export const SampledPiano = {
         src.buffer = z.buffer;
         src.playbackRate.value = Math.pow(2, (midi - z.rootMidi) / 12);
         const g = ctx.createGain();
-        g.gain.value = 0.2 + 0.6 * (vel / 127); // громкость по velocity
+        // Громкость — из СЫРОЙ float-velocity по общей кривой (ff != fff!),
+        // потолок 0.95 во избежание клиппинга при полифонии.
+        g.gain.value = Math.min(0.95, velocityGain(velocity, 0.85));
         src.connect(g); g.connect(this.master);
         src.start(when);
         const voice = {

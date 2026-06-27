@@ -1,0 +1,22 @@
+{
+  "instrument": "piano",
+  "timeSignature": "4/4",
+  "keySignature": "C",
+  "measures": [
+    {
+      "treble": [{ "keys": ["c/5"], "duration": "w", "rest": false }],
+      "bass": [],
+      "_dyn": { "treble": [{ "mark": "pp", "beat": 0 }] }
+    },
+    {
+      "treble": [{ "keys": ["c/5"], "duration": "w", "rest": false }],
+      "bass": [],
+      "_dyn": { "treble": [{ "mark": "mf", "beat": 0 }] }
+    },
+    {
+      "treble": [{ "keys": ["c/5"], "duration": "w", "rest": false }],
+      "bass": [],
+      "_dyn": { "treble": [{ "mark": "ff", "beat": 0 }] }
+    }
+  ]
+}

@@ -72,6 +72,102 @@ class Tuplet {
       Tuplet(j['actual'] as int? ?? 3, j['normal'] as int? ?? 2);
 }
 
+/// Динамический оттенок (forte/piano…). ОТДЕЛЬНАЯ модель и ОТДЕЛЬНЫЙ
+/// нотационный объект — как в MuseScore/Dorico/Finale/Sibelius. НЕ свойство
+/// ноты: оттенок привязан к РИТМИЧЕСКОЙ позиции и действует на все последующие
+/// ноты до следующего оттенка.
+///
+/// Каждое значение само знает (а) свои буквы для глифа (p/m/f — движок проецирует
+/// в SMuFL dynamicPiano/Mezzo/Forte) и (б) свою громкость. Поэтому расширение до
+/// sfz/fp/rfz/cresc./dim. — это ДОБАВЛЕНИЕ значений (и при необходимости новых
+/// букв s/z/r), без переделки модели, компилятора или рендера. Вилки (hairpins)
+/// лягут отдельным объектом с тем же позиционным якорем.
+enum DynamicMark {
+  ppp,
+  pp,
+  p,
+  mp,
+  mf,
+  f,
+  ff,
+  fff;
+
+  String get id => name;
+
+  /// Текстовая метка (буквы). Совпадает с [name] для ppp..fff; вынесено
+  /// отдельным геттером, чтобы будущие знаки (sfz, fp, …) могли задавать
+  /// последовательность букв, отличную от имени константы.
+  String get label => name;
+
+  /// Громкость воспроизведения (velocity/gain, 0..1; fff>1 клампится сэмплером
+  /// и синтезом). ЗЕРКАЛО для модели и тестов: РЕАЛЬНОЕ разрешение громкости
+  /// происходит в ОДНОМ месте — playback-компиляторе движка
+  /// (assets/www/js/domain/dynamics.js → DYNAMIC_VELOCITY), точно как сдвиг
+  /// высоты у [Accidental] считается в движке. Значения синхронизированы.
+  double get velocity => switch (this) {
+        DynamicMark.ppp => 0.20,
+        DynamicMark.pp => 0.30,
+        DynamicMark.p => 0.45,
+        DynamicMark.mp => 0.60,
+        DynamicMark.mf => 0.75,
+        DynamicMark.f => 0.90,
+        DynamicMark.ff => 1.00,
+        DynamicMark.fff => 1.10,
+      };
+
+  static DynamicMark fromId(String? id) => DynamicMark.values.firstWhere(
+        (e) => e.name == id,
+        orElse: () => DynamicMark.mf,
+      );
+}
+
+/// Один динамический оттенок, привязанный к ритмической позиции внутри такта.
+/// Хранится в [Measure] в списке своего голоса — поэтому ИНДЕКС ТАКТА задаётся
+/// контейнером и в объекте не дублируется (хранятся [voice] и [beat]).
+/// [beat] — доля от начала такта в ЧЕТВЕРТЯХ (та же единица, что startBeat
+/// компилятора): один оттенок на (голос+доля).
+///
+/// На MusicNote оттенок НЕ хранится. Реальная громкость каждого playback-события
+/// считается в одном месте (движок) по «активному» оттенку — этот объект описывает
+/// лишь ЧТО и ГДЕ записано.
+class Dynamic {
+  final DynamicMark mark;
+  final String voice;
+  final double beat;
+
+  const Dynamic({required this.mark, required this.voice, this.beat = 0});
+
+  Dynamic copy() => Dynamic(mark: mark, voice: voice, beat: beat);
+
+  /// Тот же якорь с другим знаком (замена оттенка на месте).
+  Dynamic withMark(DynamicMark m) => Dynamic(mark: m, voice: voice, beat: beat);
+
+  /// Persistence-JSON: голос задаётся ключом контейнера (в [Measure]), поэтому
+  /// в объект не пишется — лаконично и без рассинхрона с ключом.
+  Map<String, dynamic> toJson() => {'mark': mark.id, 'beat': beat};
+
+  /// Render-проекция для движка: метка (буквы глифа) + доля. Громкость движок
+  /// считает сам из метки (единое место) — здесь только что/где нарисовать.
+  Map<String, dynamic> toRenderJson() => {'mark': mark.id, 'beat': beat};
+
+  factory Dynamic.fromJson(Map<String, dynamic> j, {required String voice}) =>
+      Dynamic(
+        mark: DynamicMark.fromId(j['mark'] as String?),
+        voice: voice,
+        beat: (j['beat'] as num?)?.toDouble() ?? 0,
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      other is Dynamic &&
+      other.mark == mark &&
+      other.voice == voice &&
+      other.beat == beat;
+
+  @override
+  int get hashCode => Object.hash(mark, voice, beat);
+}
+
 /// Знак альтерации головки ноты. ОТДЕЛЬНАЯ модель (не bool) — как в MuseScore/
 /// Dorico/Finale. Архитектура расширяема до микротонов/четвертьтонов простым
 /// добавлением значений: каждое значение само знает свой сдвиг в полутонах и
@@ -379,11 +475,19 @@ class MusicNote {
 }
 
 /// Такт: хранит ноты по голосам. Для piano голоса treble+bass,
-/// для drums — только perc.
+/// для drums — только perc. Динамические оттенки ([Dynamic]) живут ПАРАЛЛЕЛЬНО
+/// нотам — в [dynamics] (голос -> список оттенков, отсортированный по доле), а
+/// не внутри MusicNote. В JSON хранятся под зарезервированным ключом `_dyn`
+/// (имена голосов с подчёркивания не начинаются), что не ломает старые файлы
+/// без оттенков и не путается с голосами при разборе.
 class Measure {
   final Map<String, List<MusicNote>> voices;
+  final Map<String, List<Dynamic>> dynamics;
 
-  Measure(this.voices);
+  static const String _dynKey = '_dyn';
+
+  Measure(this.voices, {Map<String, List<Dynamic>>? dynamics})
+      : dynamics = dynamics ?? {};
 
   factory Measure.empty(InstrumentType instrument) => Measure({
         for (final v in instrument.voiceIds) v: <MusicNote>[],
@@ -391,29 +495,72 @@ class Measure {
 
   List<MusicNote> voice(String id) => voices.putIfAbsent(id, () => []);
 
-  /// Глубокая копия такта (каждая нота копируется, флаг auto сохраняется).
-  Measure copy() => Measure({
-        for (final entry in voices.entries)
-          entry.key: entry.value.map((n) => n.copy()).toList(),
-      });
+  /// Список оттенков голоса (создаётся при первом обращении).
+  List<Dynamic> dynamicsOf(String id) => dynamics.putIfAbsent(id, () => []);
 
-  Map<String, dynamic> toJson() => {
-        for (final entry in voices.entries)
-          entry.key: entry.value.map((n) => n.toJson()).toList(),
+  /// Глубокая копия такта (ноты + оттенки; флаг auto нот сохраняется).
+  Measure copy() => Measure(
+        {
+          for (final entry in voices.entries)
+            entry.key: entry.value.map((n) => n.copy()).toList(),
+        },
+        dynamics: {
+          for (final entry in dynamics.entries)
+            entry.key: entry.value.map((d) => d.copy()).toList(),
+        },
+      );
+
+  /// JSON оттенков по голосам (только непустые списки) — общий для persistence
+  /// и render-проекции. Пусто, если оттенков в такте нет (лаконичный JSON).
+  Map<String, dynamic> _dynJson(Map<String, dynamic> Function(Dynamic) enc) => {
+        for (final entry in dynamics.entries)
+          if (entry.value.isNotEmpty)
+            entry.key: entry.value.map(enc).toList(),
       };
 
-  /// Render-проекция для движка: ноты как natural-aware ключи VexFlow.
-  Map<String, dynamic> toRenderJson() => {
-        for (final entry in voices.entries)
-          entry.key: entry.value.map((n) => n.toRenderJson()).toList(),
-      };
+  Map<String, dynamic> toJson() {
+    final j = <String, dynamic>{
+      for (final entry in voices.entries)
+        entry.key: entry.value.map((n) => n.toJson()).toList(),
+    };
+    final dyn = _dynJson((d) => d.toJson());
+    if (dyn.isNotEmpty) j[_dynKey] = dyn;
+    return j;
+  }
 
-  factory Measure.fromJson(Map<String, dynamic> j) => Measure({
-        for (final entry in j.entries)
-          entry.key: (entry.value as List)
-              .map((e) => MusicNote.fromJson(e as Map<String, dynamic>))
-              .toList(),
-      });
+  /// Render-проекция для движка: ноты как natural-aware ключи VexFlow + оттенки
+  /// под `_dyn` (движок индексирует такт по голосам/`_dyn` явно, не итерируя
+  /// ключи, поэтому лишний ключ безопасен).
+  Map<String, dynamic> toRenderJson() {
+    final j = <String, dynamic>{
+      for (final entry in voices.entries)
+        entry.key: entry.value.map((n) => n.toRenderJson()).toList(),
+    };
+    final dyn = _dynJson((d) => d.toRenderJson());
+    if (dyn.isNotEmpty) j[_dynKey] = dyn;
+    return j;
+  }
+
+  factory Measure.fromJson(Map<String, dynamic> j) {
+    final voices = <String, List<MusicNote>>{};
+    final dynamics = <String, List<Dynamic>>{};
+    for (final entry in j.entries) {
+      if (entry.key == _dynKey) {
+        final m = entry.value as Map<String, dynamic>;
+        for (final de in m.entries) {
+          dynamics[de.key] = (de.value as List)
+              .map((e) =>
+                  Dynamic.fromJson(e as Map<String, dynamic>, voice: de.key))
+              .toList();
+        }
+        continue;
+      }
+      voices[entry.key] = (entry.value as List)
+          .map((e) => MusicNote.fromJson(e as Map<String, dynamic>))
+          .toList();
+    }
+    return Measure(voices, dynamics: dynamics);
+  }
 }
 
 /// Партитура целиком — корневая сущность хранилища.

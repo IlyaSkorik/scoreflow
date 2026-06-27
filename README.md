@@ -27,6 +27,7 @@ parts and produces clean, page-based **A4 PDF** output without clipped bars.
 - Ties (duration) and slurs (phrasing)
 - Tuplets — universal `actual:normal` (triplets, quintuplets, sextuplets, septuplets, custom)
 - Accidentals (♯ ♭ ♮ 𝄪 𝄫) — per-notehead model; playback pitch = key signature + accidental + measure rules
+- Dynamics (ppp pp p mp mf f ff fff) — notation objects on a rhythmic position; playback loudness resolved once in the compiler
 - Key signatures & time signatures (incl. custom meters)
 - Professional beaming (beat groups, compound/irregular meters)
 - Automatic measure completion (canonical rest fill)
@@ -93,7 +94,7 @@ Web Audio API (sampled playback + scheduler)
 
 Next priorities (details in [ROADMAP.md](ROADMAP.md)):
 
-- Dynamics (pp–ff) and crescendo / diminuendo
+- Crescendo / diminuendo (hairpins) — builds on the dynamics layer
 - Copy / paste measures and multi-selection
 - MusicXML import
 - Articulations (staccato, accent, tenuto, …)
