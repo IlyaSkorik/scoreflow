@@ -484,9 +484,21 @@ class Measure {
   final Map<String, List<MusicNote>> voices;
   final Map<String, List<Dynamic>> dynamics;
 
-  static const String _dynKey = '_dyn';
+  /// Смена тональности С НАЧАЛА этого такта (имя VexFlow: "G", "Bb", …) или
+  /// null — тональность не меняется (наследуется от предыдущего такта/начала
+  /// партитуры). ПОЗИЦИОННЫЙ якорь (как размер): привязан к НОМЕРУ такта, не к
+  /// нотам — при reflow остаётся на своём такте (см. editor `_normalize`).
+  /// Действующая тональность каждого такта разрешается в ОДНОМ месте
+  /// (движок domain/keysig.effectiveKeys для рендера/playback, и
+  /// [Score.effectiveKeySignatureAt] — зеркало для модели/тестов).
+  /// Хранится под зарезервированным ключом `_key` (как `_dyn`) — старые файлы
+  /// без него грузятся, а с голосами он не путается (имена голосов без `_`).
+  String? keySignature;
 
-  Measure(this.voices, {Map<String, List<Dynamic>>? dynamics})
+  static const String _dynKey = '_dyn';
+  static const String _keyKey = '_key';
+
+  Measure(this.voices, {Map<String, List<Dynamic>>? dynamics, this.keySignature})
       : dynamics = dynamics ?? {};
 
   factory Measure.empty(InstrumentType instrument) => Measure({
@@ -498,7 +510,8 @@ class Measure {
   /// Список оттенков голоса (создаётся при первом обращении).
   List<Dynamic> dynamicsOf(String id) => dynamics.putIfAbsent(id, () => []);
 
-  /// Глубокая копия такта (ноты + оттенки; флаг auto нот сохраняется).
+  /// Глубокая копия такта (ноты + оттенки + смена тональности; флаг auto нот
+  /// сохраняется).
   Measure copy() => Measure(
         {
           for (final entry in voices.entries)
@@ -508,6 +521,7 @@ class Measure {
           for (final entry in dynamics.entries)
             entry.key: entry.value.map((d) => d.copy()).toList(),
         },
+        keySignature: keySignature,
       );
 
   /// JSON оттенков по голосам (только непустые списки) — общий для persistence
@@ -525,12 +539,14 @@ class Measure {
     };
     final dyn = _dynJson((d) => d.toJson());
     if (dyn.isNotEmpty) j[_dynKey] = dyn;
+    if (keySignature != null) j[_keyKey] = keySignature;
     return j;
   }
 
   /// Render-проекция для движка: ноты как natural-aware ключи VexFlow + оттенки
-  /// под `_dyn` (движок индексирует такт по голосам/`_dyn` явно, не итерируя
-  /// ключи, поэтому лишний ключ безопасен).
+  /// под `_dyn` + смена тональности под `_key` (движок индексирует такт по
+  /// голосам/`_dyn`/`_key` явно, не итерируя ключи, поэтому лишние ключи
+  /// безопасны). `_key` читают effectiveKeys/compiler/render/print.
   Map<String, dynamic> toRenderJson() {
     final j = <String, dynamic>{
       for (final entry in voices.entries)
@@ -538,12 +554,14 @@ class Measure {
     };
     final dyn = _dynJson((d) => d.toRenderJson());
     if (dyn.isNotEmpty) j[_dynKey] = dyn;
+    if (keySignature != null) j[_keyKey] = keySignature;
     return j;
   }
 
   factory Measure.fromJson(Map<String, dynamic> j) {
     final voices = <String, List<MusicNote>>{};
     final dynamics = <String, List<Dynamic>>{};
+    String? keySignature;
     for (final entry in j.entries) {
       if (entry.key == _dynKey) {
         final m = entry.value as Map<String, dynamic>;
@@ -555,11 +573,15 @@ class Measure {
         }
         continue;
       }
+      if (entry.key == _keyKey) {
+        keySignature = entry.value as String?;
+        continue;
+      }
       voices[entry.key] = (entry.value as List)
           .map((e) => MusicNote.fromJson(e as Map<String, dynamic>))
           .toList();
     }
-    return Measure(voices, dynamics: dynamics);
+    return Measure(voices, dynamics: dynamics, keySignature: keySignature);
   }
 }
 
@@ -654,6 +676,20 @@ class Score {
         createdAt: DateTime.parse(j['createdAt'] as String),
         updatedAt: DateTime.parse(j['updatedAt'] as String),
       );
+
+  /// Действующая тональность в такте [measure]: стартовая [keySignature],
+  /// переопределённая последней сменой ([Measure.keySignature]) на такте ≤
+  /// [measure]. Зеркало движкового domain/keysig.effectiveKeys для модели/UI/
+  /// тестов; РЕАЛЬНОЕ разрешение высоты остаётся в playback-компиляторе.
+  String effectiveKeySignatureAt(int measure) {
+    var cur = keySignature;
+    final last = measure < measures.length ? measure : measures.length - 1;
+    for (var i = 0; i <= last; i++) {
+      final k = measures[i].keySignature;
+      if (k != null) cur = k;
+    }
+    return cur;
+  }
 
   String encode() => jsonEncode(toJson());
 
