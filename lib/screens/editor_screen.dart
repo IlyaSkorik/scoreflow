@@ -9,6 +9,7 @@ import '../models/history.dart';
 import '../models/palette.dart';
 import '../models/reflow.dart';
 import '../models/score.dart';
+import '../widgets/metronome_icon.dart';
 
 /// Тональности для пикера в листе «Ещё» (формат VexFlow keySignature).
 const List<String> _keySignatures = [
@@ -1764,7 +1765,10 @@ class _PlaybackBar extends StatelessWidget {
             tooltip: 'Метроном',
             isSelected: metronomeOn,
             visualDensity: VisualDensity.compact,
-            icon: const Icon(Icons.av_timer),
+            icon: MetronomeIcon(
+              size: 24,
+              color: metronomeOn ? scheme.primary : null,
+            ),
             color: metronomeOn ? scheme.primary : null,
             onPressed: onToggleMetronome,
           ),
