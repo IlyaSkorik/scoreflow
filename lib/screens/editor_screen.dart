@@ -6,6 +6,7 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import '../data/score_repository.dart';
 import '../main.dart' show kEngineUrl;
 import '../models/history.dart';
+import '../models/keysig.dart';
 import '../models/palette.dart';
 import '../models/reflow.dart';
 import '../models/score.dart';
@@ -855,6 +856,9 @@ class _EditorScreenState extends State<EditorScreen> {
   void _setMeasureKey(String? key) {
     if (_score!.instrument == InstrumentType.drums) return;
     final m = _cursor.measure;
+    // Действующая тональность ДО правки — чтобы понять, реально ли она сменилась
+    // (и нужно ли нормализовать локальные альтерации).
+    final oldEff = _score!.effectiveKeySignatureAt(m);
     _commit(() {
       if (m == 0) {
         _score!.keySignature = key ?? 'C';
@@ -864,6 +868,14 @@ class _EditorScreenState extends State<EditorScreen> {
       } else {
         final prev = _score!.effectiveKeySignatureAt(m - 1);
         _score!.measures[m].keySignature = (key == prev) ? null : key;
+      }
+      // Нормализация локальных альтераций под новую тональность: избыточные
+      // знаки (дающие ту же высоту, что и тональность) убираются, значимые —
+      // сохраняются. Звучащие высоты не меняются. Только если тональность
+      // действительно сменилась. ДО reflow (_commit -> _normalize), чтобы
+      // перепаковка шла уже по очищенным нотам.
+      if (_score!.effectiveKeySignatureAt(m) != oldEff) {
+        normalizeAccidentalsFrom(_score!, m);
       }
     });
   }
