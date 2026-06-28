@@ -47,10 +47,25 @@ class TimeSignature {
     );
   }
 
+  /// Ёмкость такта в ЦЕЛЫХ нотах (доля от целой) — beats/beatValue. 4/4 = 1.0,
+  /// 3/4 = 0.75, 5/8 = 0.625, 7/8 = 0.875. Зеркало движкового
+  /// `domain/timesig.measureCapacityQ` (там — в четвертях: ×4). Единица [capacity]
+  /// совпадает с [packVoice]/[noteFraction] — доля от целой ноты.
+  double get capacity => beats / beatValue;
+
   Map<String, dynamic> toJson() => {'beats': beats, 'beatValue': beatValue};
 
   factory TimeSignature.fromJson(Map<String, dynamic> j) =>
       TimeSignature(j['beats'] as int? ?? 4, j['beatValue'] as int? ?? 4);
+
+  @override
+  bool operator ==(Object other) =>
+      other is TimeSignature &&
+      other.beats == beats &&
+      other.beatValue == beatValue;
+
+  @override
+  int get hashCode => Object.hash(beats, beatValue);
 }
 
 /// Соотношение группы нестандартной ритмики (tuplet): [actualNotes] нот за
@@ -495,10 +510,26 @@ class Measure {
   /// без него грузятся, а с голосами он не путается (имена голосов без `_`).
   String? keySignature;
 
+  /// Смена РАЗМЕРА С НАЧАЛА этого такта (напр. 3/4, 7/8) или null — размер не
+  /// меняется (наследуется от предыдущего такта/начала партитуры). ПОЗИЦИОННЫЙ
+  /// якорь — как [keySignature]: привязан к НОМЕРУ такта, не к нотам; при reflow
+  /// остаётся на своём такте (см. editor `_normalize`). Действующий размер
+  /// каждого такта разрешается в ОДНОМ месте (движок domain/timesig.
+  /// effectiveTimeSignatures для рендера/playback, и [Score.effectiveTimeSignatureAt]
+  /// — зеркало для модели/тестов). Ёмкость такта (сколько нот влезает) берётся
+  /// ТОЛЬКО отсюда: глобального размера у алгоритмов больше нет.
+  /// Хранится под зарезервированным ключом `_ts` (как `_key`/`_dyn`) — строкой
+  /// VexFlow "3/4"; старые файлы без него грузятся.
+  TimeSignature? timeSignature;
+
   static const String _dynKey = '_dyn';
   static const String _keyKey = '_key';
+  static const String _tsKey = '_ts';
 
-  Measure(this.voices, {Map<String, List<Dynamic>>? dynamics, this.keySignature})
+  Measure(this.voices,
+      {Map<String, List<Dynamic>>? dynamics,
+      this.keySignature,
+      this.timeSignature})
       : dynamics = dynamics ?? {};
 
   factory Measure.empty(InstrumentType instrument) => Measure({
@@ -522,6 +553,9 @@ class Measure {
             entry.key: entry.value.map((d) => d.copy()).toList(),
         },
         keySignature: keySignature,
+        timeSignature: timeSignature == null
+            ? null
+            : TimeSignature(timeSignature!.beats, timeSignature!.beatValue),
       );
 
   /// JSON оттенков по голосам (только непустые списки) — общий для persistence
@@ -540,13 +574,15 @@ class Measure {
     final dyn = _dynJson((d) => d.toJson());
     if (dyn.isNotEmpty) j[_dynKey] = dyn;
     if (keySignature != null) j[_keyKey] = keySignature;
+    if (timeSignature != null) j[_tsKey] = timeSignature!.vex;
     return j;
   }
 
   /// Render-проекция для движка: ноты как natural-aware ключи VexFlow + оттенки
-  /// под `_dyn` + смена тональности под `_key` (движок индексирует такт по
-  /// голосам/`_dyn`/`_key` явно, не итерируя ключи, поэтому лишние ключи
-  /// безопасны). `_key` читают effectiveKeys/compiler/render/print.
+  /// под `_dyn` + смена тональности под `_key` + смена размера под `_ts` (движок
+  /// индексирует такт по голосам/`_dyn`/`_key`/`_ts` явно, не итерируя ключи,
+  /// поэтому лишние ключи безопасны). `_key` читают effectiveKeys/compiler/render/
+  /// print; `_ts` — effectiveTimeSignatures (та же тройка).
   Map<String, dynamic> toRenderJson() {
     final j = <String, dynamic>{
       for (final entry in voices.entries)
@@ -555,6 +591,7 @@ class Measure {
     final dyn = _dynJson((d) => d.toRenderJson());
     if (dyn.isNotEmpty) j[_dynKey] = dyn;
     if (keySignature != null) j[_keyKey] = keySignature;
+    if (timeSignature != null) j[_tsKey] = timeSignature!.vex;
     return j;
   }
 
@@ -562,6 +599,7 @@ class Measure {
     final voices = <String, List<MusicNote>>{};
     final dynamics = <String, List<Dynamic>>{};
     String? keySignature;
+    TimeSignature? timeSignature;
     for (final entry in j.entries) {
       if (entry.key == _dynKey) {
         final m = entry.value as Map<String, dynamic>;
@@ -577,11 +615,19 @@ class Measure {
         keySignature = entry.value as String?;
         continue;
       }
+      if (entry.key == _tsKey) {
+        final raw = entry.value;
+        timeSignature = raw == null ? null : TimeSignature.parse(raw as String);
+        continue;
+      }
       voices[entry.key] = (entry.value as List)
           .map((e) => MusicNote.fromJson(e as Map<String, dynamic>))
           .toList();
     }
-    return Measure(voices, dynamics: dynamics, keySignature: keySignature);
+    return Measure(voices,
+        dynamics: dynamics,
+        keySignature: keySignature,
+        timeSignature: timeSignature);
   }
 }
 
@@ -687,6 +733,22 @@ class Score {
     for (var i = 0; i <= last; i++) {
       final k = measures[i].keySignature;
       if (k != null) cur = k;
+    }
+    return cur;
+  }
+
+  /// Действующий РАЗМЕР в такте [measure]: стартовый [timeSignature],
+  /// переопределённый последней сменой ([Measure.timeSignature]) на такте ≤
+  /// [measure]. Зеркало движкового domain/timesig.effectiveTimeSignatures для
+  /// модели/UI/тестов; РЕАЛЬНЫЙ тайминг остаётся в playback-компиляторе. ЕДИНЫЙ
+  /// источник ёмкости такта при reflow (см. editor `_normalize`): глобального
+  /// размера у алгоритмов нет. Индекс за пределами партитуры -> последний такт.
+  TimeSignature effectiveTimeSignatureAt(int measure) {
+    var cur = timeSignature;
+    final last = measure < measures.length ? measure : measures.length - 1;
+    for (var i = 0; i <= last; i++) {
+      final t = measures[i].timeSignature;
+      if (t != null) cur = t;
     }
     return cur;
   }
