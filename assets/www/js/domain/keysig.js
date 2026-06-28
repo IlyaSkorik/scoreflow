@@ -30,3 +30,32 @@ export function keySignatureAlterations(name) {
     }
     return alt;
 }
+
+// Действующая тональность каждого такта — ЕДИНОЕ место разрешения смен
+// тональности по партитуре (используют и compiler, и render, и print, поэтому
+// логика не дублируется). Старт = тональность партитуры (с такта 0); каждый
+// такт с собственной тональностью (`_key`) переопределяет её начиная с себя.
+// Неизвестное/пустое имя такта игнорируется (тональность не меняется).
+// Возвращает массив имён тональностей по индексу такта.
+export function effectiveKeys(measures, startKey) {
+    const out = [];
+    let cur = startKey || 'C';
+    const ms = measures || [];
+    for (let i = 0; i < ms.length; i++) {
+        const k = ms[i] && ms[i]._key;
+        if (k) cur = k;
+        out.push(cur);
+    }
+    return out;
+}
+
+// Тональность для отмены (courtesy naturals) при переходе prevKey -> curKey:
+// предыдущая тональность, если она ОТЛИЧАЕТСЯ (её знаки сначала отменяются
+// бекарами по правилам гравировки — это делает VexFlow KeySignature.cancelKey),
+// иначе null (тональность не сменилась — отменять нечего). prevKey === null
+// (начало партитуры) -> null (отменять нечего). Глифы бекаров рисует VexFlow;
+// здесь — лишь решение, ЧТО отменять, чтобы render/print не дублировали правило.
+export function cancelKeyFor(prevKey, curKey) {
+    if (prevKey == null) return null;
+    return prevKey === curKey ? null : prevKey;
+}
