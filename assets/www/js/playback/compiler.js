@@ -5,7 +5,7 @@ import { durationBeats } from '../domain/durations.js';
 import { tupletScaleOf } from '../domain/tuplets.js';
 import { sameKeys } from '../domain/notes.js';
 import { resolveMidi } from '../domain/pitch.js';
-import { keySignatureAlterations } from '../domain/keysig.js';
+import { keySignatureAlterations, effectiveKeys } from '../domain/keysig.js';
 import { dynamicsTimeline, velocityAt } from '../domain/dynamics.js';
 
 // Tie-merge для playback: внутри каждого голоса (события уже в порядке
@@ -53,9 +53,11 @@ export function compilePlayback(payload) {
     const voiceIds = isDrums ? ['perc'] : ['treble', 'bass'];
     const measures = payload.measures || [];
     const measureQ = beats * (4 / beatValue); // длина такта в четвертях
-    // Альтерации тональности (ступень -> сдвиг) — одна из трёх составляющих
-    // реальной высоты. Для ударных высота не считается.
-    const keyAlt = isDrums ? {} : keySignatureAlterations(payload.keySignature || 'C');
+    // Действующая тональность КАЖДОГО такта (старт партитуры + смены `_key`) —
+    // единое разрешение из domain/keysig (та же логика, что в render/print).
+    // Альтерации (ступень -> сдвиг) пересчитываются на границе такта, поэтому
+    // playback переключается ровно на такте смены. Для ударных высота не нужна.
+    const effKeys = isDrums ? [] : effectiveKeys(measures, payload.keySignature || 'C');
     // Громкость каждого события РАЗРЕШАЕТСЯ ОДИН РАЗ из динамических оттенков:
     // на голос строим таймлайн оттенков (абсолютные четверти -> velocity), и
     // каждому событию ставим активную громкость на его startBeat. AudioEngine
@@ -68,6 +70,10 @@ export function compilePlayback(payload) {
 
     for (let mi = 0; mi < measures.length; mi++) {
         const base = mi * measureQ;
+        // Альтерации действующей тональности этого такта. Сброс знаков такта
+        // (measureAcc ниже) уже происходит на каждый такт/голос, поэтому смена
+        // тональности корректно начинает новый контекст без утечки знаков.
+        const keyAlt = isDrums ? {} : keySignatureAlterations(effKeys[mi] || 'C');
         for (let vi = 0; vi < voiceIds.length; vi++) {
             const v = voiceIds[vi];
             const notes = (measures[mi] && measures[mi][v]) || [];
