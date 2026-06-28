@@ -15,6 +15,7 @@ import { state } from '../utils/state.js';
 import { buildVoice, beamGroups, buildTuplets, measureMinWidth } from './layout.js';
 import { voiceListOf, nextRealNote, sameKeys } from '../domain/notes.js';
 import { effectiveKeys, cancelKeyFor } from '../domain/keysig.js';
+import { effectiveTimeSignatures } from '../domain/timesig.js';
 import { drawDynamic } from './dynamics.js';
 import { dynamicsBaseline } from './dynamics_layout.js';
 import { noteOnsets, indexAtBeat } from '../domain/dynamics.js';
@@ -66,25 +67,29 @@ function newPage(root) {
 }
 
 // Ширина «головы» стана: ключ + ключевые знаки [+ бекары-отмена] [+ размер].
-function headWidth(VF, ctx, cfg, keySig, timeSig, withTime, cancelSig) {
+// [timeStr] — строка размера, если на первом такте системы размер меняется
+// (или null — размер не рисуется в голове).
+function headWidth(VF, ctx, cfg, keySig, timeStr, cancelSig) {
     const s = new VF.Stave(0, 0, 400);
     s.addClef(cfg.staves[0].clef);
     if (cfg.keySig && keySig) s.addKeySignature(keySig, cancelSig || undefined);
-    if (withTime && timeSig) s.addTimeSignature(timeSig);
+    if (timeStr) s.addTimeSignature(timeStr);
     s.setContext(ctx);
     s.format();
     return s.getNoteStartX() - s.getX();
 }
 
-// Дополнительная ширина смены тональности В СЕРЕДИНЕ системы (стан без ключа):
-// насколько ключевые знаки [+ бекары-отмена] сдвигают начало нот относительно
-// голого такта. Нужна, чтобы такт со сменой получил место и не сжал ноты.
-function midKeyWidth(VF, ctx, keyName, cancelName) {
+// Дополнительная ширина смены тональности И/ИЛИ размера В СЕРЕДИНЕ системы
+// (стан без ключа): насколько ключевые знаки [+ бекары-отмена] и/или глиф
+// размера сдвигают начало нот относительно голого такта. Нужна, чтобы такт со
+// сменой получил место и не сжал ноты. null-аргументы пропускаются.
+function midLeadWidth(VF, ctx, keyName, cancelName, timeStr) {
     const bare = new VF.Stave(0, 0, 400);
     bare.setContext(ctx);
     bare.format();
     const s = new VF.Stave(0, 0, 400);
-    s.addKeySignature(keyName, cancelName || undefined);
+    if (keyName) s.addKeySignature(keyName, cancelName || undefined);
+    if (timeStr) s.addTimeSignature(timeStr);
     s.setContext(ctx);
     s.format();
     return Math.max(0, s.getNoteStartX() - bare.getNoteStartX());
@@ -113,29 +118,35 @@ function drawTitle(ctx, title, composer) {
 // Отрисовка одной системы (строки) на странице. [sysIndex] — сквозной
 // номер системы, [registry] — реестр noteId -> {sn, ctx, sys} для
 // последующего прохода лиг (Tie/Slur), общий на всю печать.
-function drawSystem(VF, ctx, sys, measures, cfg, yTop, beats, beatValue,
-                    effKeys, timeSig, sysIndex, registry, staveReg) {
+function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
+                    effKeys, sysIndex, registry, staveReg) {
     let x = PAGE.mx;
     // Тональность головы системы (+ бекары-отмена, если система начинается со
     // смены) — действующая тональность первого такта системы.
     const f = sys.firstMeasure;
     const sysKey = effKeys ? effKeys[f] : null;
     const sysCancel = (effKeys && f > 0) ? cancelKeyFor(effKeys[f - 1], effKeys[f]) : null;
+    // Размер в голове системы: на самой первой системе (такт 0) и на системе,
+    // начинающейся со смены размера; иначе не повторяется.
+    const headTimeStr = (f === 0 || (f > 0 && tsStr[f] !== tsStr[f - 1]))
+        ? tsStr[f] : null;
     sys.items.forEach(function (idx, pos) {
         const isFirst = (pos === 0);
-        const withTime = isFirst && sys.firstMeasure === 0;
         const content = sys.widths[idx];
         const staveW = (isFirst ? sys.L : 0) + content;
         // Смена тональности В СЕРЕДИНЕ системы (не первый такт) — сразу после
         // барлайна, с бекарами-отменой по правилам гравировки (VexFlow cancelKey).
         const midCancel = (effKeys && idx > 0) ? cancelKeyFor(effKeys[idx - 1], effKeys[idx]) : null;
         const midChange = !isFirst && cfg.keySig && midCancel != null;
+        // Смена размера в середине системы — также сразу после барлайна.
+        const midTimeChange = !isFirst && idx > 0 && tsStr[idx] !== tsStr[idx - 1];
 
         // Свежие голоса под отрисовку (ноты нельзя переиспользовать).
-        // measureIndex = idx — нужен реестру лиг (noteId "m:v:i").
+        // measureIndex = idx — нужен реестру лиг (noteId "m:v:i"). Ёмкость
+        // VexFlow Voice — по размеру ЭТОГО такта.
         const voices = cfg.staves.map(function (st) {
             return buildVoice(VF, measures[idx][st.voice] || [], st.clef,
-                beats, beatValue, -1, idx, st.voice);
+                effTs[idx].beats, effTs[idx].beatValue, -1, idx, st.voice);
         });
 
         // Станы такта.
@@ -144,14 +155,15 @@ function drawSystem(VF, ctx, sys, measures, cfg, yTop, beats, beatValue,
             if (isFirst) {
                 stave.addClef(st.clef);
                 if (cfg.keySig && sysKey) stave.addKeySignature(sysKey, sysCancel || undefined);
-                if (withTime && timeSig) stave.addTimeSignature(timeSig);
-            } else if (midChange) {
+                if (headTimeStr) stave.addTimeSignature(headTimeStr);
+            } else if (midChange || midTimeChange) {
                 // Клеф середины системы не рисуется, но тональность берёт
                 // вертикальные линии знаков из getClef() — задаём контекст
                 // клефа явно (без глифа), чтобы знаки баса не встали по
-                // скрипичному.
+                // скрипичному. Размер от клефа не зависит.
                 stave.clef = st.clef;
-                stave.addKeySignature(effKeys[idx], midCancel);
+                if (midChange) stave.addKeySignature(effKeys[idx], midCancel);
+                if (midTimeChange) stave.addTimeSignature(tsStr[idx]);
             }
             stave.setContext(ctx);
             stave.format();
@@ -188,7 +200,7 @@ function drawSystem(VF, ctx, sys, measures, cfg, yTop, beats, beatValue,
             // Балки создаём ДО отрисовки нот: тогда у забимованных нот
             // не рисуются одиночные флажки (хвосты).
             const beams = VF.Beam.generateBeams(v.getTickables(), {
-                groups: beamGroups(VF, beats, beatValue),
+                groups: beamGroups(VF, effTs[idx].beats, effTs[idx].beatValue),
                 beam_rests: false,
                 maintain_stem_directions: true,
             });
@@ -240,50 +252,63 @@ export function renderPrintPages(score) {
     const root = el('print-root');
     root.innerHTML = '';
 
-    const tsParts = (score.timeSignature || '4/4').split('/');
-    const beats = parseInt(tsParts[0], 10) || 4;
-    const beatValue = parseInt(tsParts[1], 10) || 4;
     const instrument = score.instrument === 'drums' ? 'drums' : 'piano';
     const cfg = layoutConfig(instrument);
     const measures = score.measures || [];
     // Действующая тональность КАЖДОГО такта (старт + смены `_key`) — единое
     // разрешение из domain/keysig (та же логика, что у compiler/render).
     const effKeys = cfg.keySig ? effectiveKeys(measures, score.keySignature || 'C') : null;
-    const timeSig = score.timeSignature || (beats + '/' + beatValue);
+    // Действующий РАЗМЕР КАЖДОГО такта (старт + смены `_ts`) — единое разрешение
+    // из domain/timesig. Глиф размера рисуется ТОЛЬКО где меняется (первый такт +
+    // смены), как на экране; в начале систем размер не повторяется.
+    const effTs = effectiveTimeSignatures(measures, score.timeSignature || '4/4');
+    const tsStr = effTs.map(function (t) { return t.beats + '/' + t.beatValue; });
     if (measures.length === 0) return 0;
-    // Смена тональности на такте i (для ширины и отрисовки в середине системы).
+    // Смена тональности / размера на такте i>0 (для ширины и отрисовки в
+    // середине системы). Размер на такте 0 — голова первой системы.
     const changedAt = function (i) {
         return effKeys && i > 0 && effKeys[i] !== effKeys[i - 1];
     };
+    const tsChange = function (i) {
+        return i > 0 && tsStr[i] !== tsStr[i - 1];
+    };
+    const timeChangedAt = function (i) { return i === 0 || tsChange(i); };
 
-    // --- проход 1: минимальные ширины тактов ---
+    // --- проход 1: минимальные ширины тактов (по размеру КАЖДОГО такта) ---
     const cm = [];
     for (let i = 0; i < measures.length; i++) {
         const vs = cfg.staves.map(function (st) {
             return buildVoice(VF, measures[i][st.voice] || [], st.clef,
-                beats, beatValue, -1, -1, st.voice);
+                effTs[i].beats, effTs[i].beatValue, -1, -1, st.voice);
         });
         cm.push(Math.max(48, measureMinWidth(VF, vs)));
     }
 
-    // первая страница + замер дополнительной ширины смен тональности в середине
-    // системы (учитывается в раскладке, чтобы такт со сменой не сжал ноты).
+    // первая страница + замер дополнительной ширины смен тональности/размера в
+    // середине системы (учитывается в раскладке, чтобы такт со сменой не сжал
+    // ноты). Один общий lead на такт: тональность [+ отмена] и/или размер.
     const ctx0 = newPage(root);
-    const keyLead = [];
+    const lead = [];
     for (let i = 0; i < measures.length; i++) {
-        keyLead.push(changedAt(i) ? midKeyWidth(VF, ctx0, effKeys[i], effKeys[i - 1]) : 0);
+        const kc = changedAt(i), tc = tsChange(i);
+        lead.push((kc || tc)
+            ? midLeadWidth(VF, ctx0, kc ? effKeys[i] : null,
+                kc ? effKeys[i - 1] : null, tc ? tsStr[i] : null)
+            : 0);
     }
     // Ведущая ширина смены в середине системы (0, если такт — первый в системе:
-    // там тональность уходит в «голову»).
+    // там смена уходит в «голову»).
     const midLead = function (sys, k) {
-        return (k > sys.firstMeasure && changedAt(k)) ? keyLead[k] : 0;
+        return (k > sys.firstMeasure && (changedAt(k) || tsChange(k))) ? lead[k] : 0;
     };
-    // Ширина «головы» системы по её действующей тональности (+ размер на первой
-    // системе, + бекары-отмена, если система начинается со смены).
+    // Ширина «головы» системы по её действующей тональности (+ размер, если
+    // система начинается с такта 0 или со смены размера, + бекары-отмена при
+    // смене тональности).
     const headOfSystem = function (f) {
         const sysKey = effKeys ? effKeys[f] : null;
         const cancel = (effKeys && f > 0) ? cancelKeyFor(effKeys[f - 1], effKeys[f]) : null;
-        return headWidth(VF, ctx0, cfg, sysKey, timeSig, f === 0, cancel);
+        const timeStr = timeChangedAt(f) ? tsStr[f] : null;
+        return headWidth(VF, ctx0, cfg, sysKey, timeStr, cancel);
     };
 
     // --- проход 2: разбиение на системы ---
@@ -366,7 +391,7 @@ export function renderPrintPages(score) {
         let y = PAGE.mtop + headOffset;
         for (let k = 0; k < n; k++) {
             drawSystem(VF, ctx, pageSystems[k], measures, cfg, y,
-                beats, beatValue, effKeys, timeSig, sysGi, printObjs, printStaves);
+                effTs, tsStr, effKeys, sysGi, printObjs, printStaves);
             sysGi++;
             y += sysH + gap;
         }

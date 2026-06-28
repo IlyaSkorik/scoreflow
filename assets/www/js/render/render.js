@@ -11,6 +11,7 @@ import { drawTiesAndSlurs } from './ligatures.js';
 import { drawScreenDynamics } from './dynamics.js';
 import { drawSelectionHighlight, keepCursorInView, attachTapListener } from './geometry.js';
 import { effectiveKeys, cancelKeyFor } from '../domain/keysig.js';
+import { effectiveTimeSignatures } from '../domain/timesig.js';
 import { Playback } from '../playback/scheduler.js';
 
 function clearCanvas() {
@@ -44,9 +45,6 @@ export function render(score, forcedWidth) {
 
     const container = el('notation-container');
     const width = forcedWidth || Math.max(320, container.clientWidth);
-    const ts = (score.timeSignature || '4/4').split('/');
-    const beats = parseInt(ts[0], 10) || 4;
-    const beatValue = parseInt(ts[1], 10) || 4;
     const isDrums = score.instrument === 'drums';
     const measures = score.measures || [];
     const cursor = score.cursor || { measure: -1, voice: '', index: -1 };
@@ -85,38 +83,52 @@ export function render(score, forcedWidth) {
         return cancelKeyFor(keys[mi - 1], keys[mi]);
     }
 
+    // Действующий РАЗМЕР КАЖДОГО такта (старт + смены `_ts`) — единое разрешение
+    // из domain/timesig (та же логика, что у compiler/print). Глиф размера
+    // рисуем ТОЛЬКО там, где он меняется (первый такт + каждая смена) — как в
+    // проф. редакторах; в начале систем размер НЕ повторяется (в отличие от
+    // тональности). Ёмкость VexFlow Voice берётся per-measure из effTs.
+    const effTs = effectiveTimeSignatures(measures, score.timeSignature || '4/4');
+    const tsStr = effTs.map(function (t) { return t.beats + '/' + t.beatValue; });
+    function timeChangedAt(mi) {
+        return mi === 0 || (mi > 0 && tsStr[mi] !== tsStr[mi - 1]);
+    }
+
     // Реальная ширина «головы» стана по ФАКТИЧЕСКИМ начальным модификаторам
     // (ключ [+ тональность с бекарами-отменой] [+ размер]), через getNoteStartX
     // временного стана. beginWidth измеряет ровно то, что будет нарисовано —
-    // поэтому смена тональности в середине строки получает корректную ширину и
-    // не сжимает ноты.
-    function beginWidth(addClef, addTime, keyName, cancelName) {
+    // поэтому смена тональности/размера в середине строки получает корректную
+    // ширину и не сжимает ноты.
+    function beginWidth(addClef, keyName, cancelName, timeStr) {
         const s = new VF.Stave(0, 0, 500);
         if (addClef) s.addClef(clefList[0]);
         if (!isDrums && keyName) s.addKeySignature(keyName, cancelName || undefined);
-        if (addTime) s.addTimeSignature(score.timeSignature);
+        if (timeStr) s.addTimeSignature(timeStr);
         s.setContext(ctx);
         s.format();
         return s.getNoteStartX();
     }
-    const headInner = beginWidth(false, false, null, null); // середина строки без модиф.
-    // Ведущая ширина такта: на старте строки — ключ+тональность[+размер на
-    // такте 0]; в середине строки при смене тональности — тональность с
-    // бекарами; иначе — голый отступ.
+    const headInner = beginWidth(false, null, null, null); // середина строки без модиф.
+    // Ведущая ширина такта: на старте строки — ключ+тональность[+размер при
+    // смене/такте 0]; в середине строки при смене тональности — тональность с
+    // бекарами, при смене размера — глиф размера; иначе — голый отступ.
     function leadOf(col, mi) {
         const keyName = isDrums ? null : keys[mi];
         const cancel = cancelOf(mi);
-        if (col === 0) return beginWidth(true, mi === 0, keyName, cancel);
-        if (cancel) return beginWidth(false, false, keyName, cancel);
+        const timeStr = timeChangedAt(mi) ? tsStr[mi] : null;
+        if (col === 0) return beginWidth(true, keyName, cancel, timeStr);
+        if (cancel || timeStr) {
+            return beginWidth(false, cancel ? keyName : null, cancel, timeStr);
+        }
         return headInner;
     }
 
-    // проход 1: минимальная ширина содержимого каждого такта
+    // проход 1: минимальная ширина содержимого каждого такта (по размеру такта)
     const cm = [];
     for (let i = 0; i < measures.length; i++) {
         const vs = voiceList.map(function (v, vi) {
             return buildVoice(VF, measures[i][v] || [], clefList[vi],
-                beats, beatValue, -1, i, v);
+                effTs[i].beats, effTs[i].beatValue, -1, i, v);
         });
         cm.push(Math.max(40, measureMinWidth(VF, vs)));
     }
@@ -166,7 +178,6 @@ export function render(score, forcedWidth) {
             const i = items[col];
             const m = measures[i];
             const rowStart = col === 0;
-            const isFirst = i === 0;
             const contentW = es[col] * ratio +
                 (sumE > 0 ? extra * (es[col] / sumE) : 0);
             const w = leadOf(col, i) + contentW;
@@ -176,13 +187,17 @@ export function render(score, forcedWidth) {
                 if (isDrums) {
                     const stave = new VF.Stave(x, yTop + 20, w);
                     if (rowStart) stave.addClef('percussion');
-                    if (isFirst) stave.addTimeSignature(score.timeSignature);
+                    // Размер — только на такте смены (вкл. такт 0), не на каждой
+                    // системе.
+                    if (timeChangedAt(i)) stave.addTimeSignature(tsStr[i]);
                     stave.setContext(ctx).draw();
 
                     const cIdx = (cursor.measure === i && cursor.voice === 'perc')
                         ? cursor.index : -1;
-                    const v = buildVoice(VF, m.perc, 'percussion', beats, beatValue, cIdx, i, 'perc');
-                    formatAndDraw(VF, ctx, [v], [stave], w, rowStart, isFirst, beats, beatValue);
+                    const v = buildVoice(VF, m.perc, 'percussion',
+                        effTs[i].beats, effTs[i].beatValue, cIdx, i, 'perc');
+                    formatAndDraw(VF, ctx, [v], [stave], w, rowStart,
+                        effTs[i].beats, effTs[i].beatValue);
                 } else {
                     const treble = new VF.Stave(x, yTop, w);
                     const bass = new VF.Stave(x, yTop + bassDY, w);
@@ -207,9 +222,12 @@ export function render(score, forcedWidth) {
                         treble.addKeySignature(keyName, cancel);
                         bass.addKeySignature(keyName, cancel);
                     }
-                    if (isFirst) {
-                        treble.addTimeSignature(score.timeSignature);
-                        bass.addTimeSignature(score.timeSignature);
+                    // Размер — только на такте смены (вкл. такт 0): рисуется
+                    // сразу после тональности, перед первой нотой. На старте
+                    // систем не повторяется (в отличие от тональности).
+                    if (timeChangedAt(i)) {
+                        treble.addTimeSignature(tsStr[i]);
+                        bass.addTimeSignature(tsStr[i]);
                     }
                     treble.setContext(ctx).draw();
                     bass.setContext(ctx).draw();
@@ -218,9 +236,12 @@ export function render(score, forcedWidth) {
                         ? cursor.index : -1;
                     const bIdx = (cursor.measure === i && cursor.voice === 'bass')
                         ? cursor.index : -1;
-                    const tv = buildVoice(VF, m.treble, 'treble', beats, beatValue, tIdx, i, 'treble');
-                    const bv = buildVoice(VF, m.bass, 'bass', beats, beatValue, bIdx, i, 'bass');
-                    formatAndDraw(VF, ctx, [tv, bv], [treble, bass], w, rowStart, isFirst, beats, beatValue);
+                    const tv = buildVoice(VF, m.treble, 'treble',
+                        effTs[i].beats, effTs[i].beatValue, tIdx, i, 'treble');
+                    const bv = buildVoice(VF, m.bass, 'bass',
+                        effTs[i].beats, effTs[i].beatValue, bIdx, i, 'bass');
+                    formatAndDraw(VF, ctx, [tv, bv], [treble, bass], w, rowStart,
+                        effTs[i].beats, effTs[i].beatValue);
 
                     if (rowStart) {
                         new VF.StaveConnector(treble, bass)
@@ -362,7 +383,7 @@ function computeDesiredSpacing(score, isDrums) {
     return { bassDY: bassDY, rowHGrand: rowHGrand, rowHDrums: 130 };
 }
 
-function formatAndDraw(VF, ctx, voices, staves, measureW, rowStart, isFirst, beats, beatValue) {
+function formatAndDraw(VF, ctx, voices, staves, measureW, rowStart, beats, beatValue) {
     const fmt = new VF.Formatter();
     voices.forEach((v) => fmt.joinVoices([v]));
     // Tuplets создаём ДО форматирования (применяют множитель тиков).
