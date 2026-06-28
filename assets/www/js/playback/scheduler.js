@@ -14,6 +14,7 @@ import { SampledPiano } from '../audio/sampled_piano.js';
 import { SampledDrums } from '../audio/sampled_drums.js';
 import { drumType } from '../domain/drums.js';
 import { compilePlayback } from './compiler.js';
+import { measureIndexAtBeat } from '../domain/timesig.js';
 
 function ensureHighlightLayer() {
     let layer = el('note-highlights');
@@ -35,7 +36,7 @@ export const Playback = {
     lookahead: null,     // setInterval-«насос» упреждения
     raf: null,
     nextEvent: 0,        // указатель в comp.events
-    nextClickBeat: 0,    // следующая доля метронома (в долях такта)
+    nextClick: 0,        // указатель в comp.clicks (готовая сетка метронома)
     xmap: [],            // beat->X по строкам (playhead по муз. времени)
     followPlayback: true,// Vertical Follow: скролл к новой системе
     _followRow: -1,      // строка, к которой последний раз скроллили
@@ -62,7 +63,10 @@ export const Playback = {
         const lay = state.lastLayout;
         const rows = lay ? lay.rows : 1;
         const geom = (lay && lay.geom) || [];
-        const measureQ = this.comp.measureQ || 4;
+        // Сетка тактов компилятора: starts[mi] — абсолютный старт такта
+        // (четверти), разный при сменах размера. Индекс такта по доле берём из
+        // domain/timesig (тот же поиск, что в compiler/reflow).
+        const starts = this.comp.starts || [0];
 
         const byRow = [];
         for (let r = 0; r < rows; r++) byRow.push({});
@@ -72,7 +76,7 @@ export const Playback = {
             const e = ev[i];
             const hb = state.noteHitIndex[e.noteId];
             if (!hb) continue;
-            const mIdx = Math.floor(e.startBeat / measureQ + 1e-6);
+            const mIdx = measureIndexAtBeat(starts, e.startBeat);
             const g = geom[mIdx];
             if (!g) continue;
             const slot = byRow[g.row];
@@ -91,7 +95,8 @@ export const Playback = {
             if (!g) continue;
             const right = g.x + g.w;
             if (right > rowRight[g.row]) rowRight[g.row] = right;
-            const endBeat = (mi + 1) * measureQ;
+            // Конец такта = старт следующего (starts имеет финальный элемент).
+            const endBeat = starts[mi + 1] != null ? starts[mi + 1] : starts[mi];
             if (endBeat > rowLastBeat[g.row]) rowLastBeat[g.row] = endBeat;
         }
 
@@ -133,7 +138,7 @@ export const Playback = {
         if (this.comp.events.length === 0) return;
         this.playing = true;
         this.nextEvent = 0;
-        this.nextClickBeat = 0;
+        this.nextClick = 0;
         this._followRow = -1; // первая смена системы вызовет скролл
         this.startTime = ctx.currentTime + 0.08; // запас на планирование
         el('playhead').classList.add('active');
@@ -168,19 +173,20 @@ export const Playback = {
             this.nextEvent++;
         }
 
-        // метроном: доля = 4/beatValue четвертей, акцент на доле 0 такта.
-        // Счётчик двигаем всегда — звучит только при включённом метрономе.
-        const beatQ = 4 / this.comp.beatValue;
-        while (this.nextClickBeat * beatQ <= this.comp.totalBeats &&
-               this.secForBeat(this.nextClickBeat * beatQ) < horizon) {
+        // метроном: ГОТОВАЯ сетка щелчков (comp.clicks) — доли каждого такта с
+        // акцентом на доле 0, посчитанные в domain/timesig по ДЕЙСТВУЮЩЕМУ
+        // размеру КАЖДОГО такта (смены метра/составные размеры корректны без
+        // логики здесь). Указатель двигаем всегда — звучит при включённом.
+        const clicks = this.comp.clicks || [];
+        while (this.nextClick < clicks.length &&
+               this.secForBeat(clicks[this.nextClick].beat) < horizon) {
             if (this.metronome) {
-                const when = this.secForBeat(this.nextClickBeat * beatQ);
+                const when = this.secForBeat(clicks[this.nextClick].beat);
                 if (when >= ctx.currentTime) {
-                    const accent = (this.nextClickBeat % this.comp.beats) === 0;
-                    AudioEngine.click(when, accent);
+                    AudioEngine.click(when, clicks[this.nextClick].accent);
                 }
             }
-            this.nextClickBeat++;
+            this.nextClick++;
         }
 
         if (this.nextEvent >= ev.length &&
@@ -203,11 +209,11 @@ export const Playback = {
 
     // Строка (система) для текущей доли — из такта, а не из id ноты.
     _rowForBeat: function (curBeat) {
-        const measureQ = this.comp.measureQ || 4;
+        const starts = this.comp.starts || [0];
         const total = this.comp.totalBeats;
         const geom = (state.lastLayout && state.lastLayout.geom) || [];
-        const totalMeasures = Math.max(1, Math.round(total / measureQ));
-        let mIdx = Math.floor(Math.max(0, Math.min(curBeat, total)) / measureQ + 1e-6);
+        const totalMeasures = Math.max(1, starts.length - 1);
+        let mIdx = measureIndexAtBeat(starts, Math.max(0, Math.min(curBeat, total)));
         if (mIdx >= totalMeasures) mIdx = totalMeasures - 1;
         if (mIdx < 0) mIdx = 0;
         return geom[mIdx] ? geom[mIdx].row : 0;

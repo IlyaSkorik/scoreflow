@@ -7,6 +7,9 @@ import { sameKeys } from '../domain/notes.js';
 import { resolveMidi } from '../domain/pitch.js';
 import { keySignatureAlterations, effectiveKeys } from '../domain/keysig.js';
 import { dynamicsTimeline, velocityAt } from '../domain/dynamics.js';
+import {
+    effectiveTimeSignatures, measureCapacityQ, measureStarts, metronomeClicks,
+} from '../domain/timesig.js';
 
 // Tie-merge для playback: внутри каждого голоса (события уже в порядке
 // времени) поглощаем цепочку лиг длительности в одно событие — один
@@ -42,17 +45,21 @@ function mergeTies(events) {
 
 // --- Playback Compiler ---------------------------------------------
 // Событие: { noteId, startBeat, durationBeats, keys, voiceId, rest }.
-// Биты — в четвертях. Старт каждого такта привязан к его индексу
-// (base = mi * measureQ), поэтому неполные/перелитые такты не сбивают
-// временную сетку. Паузы и пустые такты дают «якоря» для playhead.
+// Биты — в четвертях. Старт каждого такта берётся из кумулятивной сетки
+// (starts[mi]) по ДЕЙСТВУЮЩЕМУ размеру КАЖДОГО такта (mid-score смены метра),
+// поэтому неполные/перелитые такты и разные размеры не сбивают временную сетку.
+// Паузы и пустые такты дают «якоря» для playhead.
 export function compilePlayback(payload) {
-    const ts = (payload.timeSignature || '4/4').split('/');
-    const beats = parseInt(ts[0], 10) || 4;
-    const beatValue = parseInt(ts[1], 10) || 4;
     const isDrums = payload.instrument === 'drums';
     const voiceIds = isDrums ? ['perc'] : ['treble', 'bass'];
     const measures = payload.measures || [];
-    const measureQ = beats * (4 / beatValue); // длина такта в четвертях
+    // Действующий РАЗМЕР КАЖДОГО такта (старт + смены `_ts`) — единое разрешение
+    // из domain/timesig (та же логика, что в render/print). Ёмкость такта и
+    // абсолютные старты считаются отсюда; глобального размера нет.
+    const effTs = effectiveTimeSignatures(measures, payload.timeSignature || '4/4');
+    const capsQ = effTs.map(measureCapacityQ); // длина каждого такта в четвертях
+    const starts = measureStarts(capsQ);       // абсолютный старт такта (+ финал)
+    const totalBeats = starts[starts.length - 1];
     // Действующая тональность КАЖДОГО такта (старт партитуры + смены `_key`) —
     // единое разрешение из domain/keysig (та же логика, что в render/print).
     // Альтерации (ступень -> сдвиг) пересчитываются на границе такта, поэтому
@@ -62,14 +69,16 @@ export function compilePlayback(payload) {
     // на голос строим таймлайн оттенков (абсолютные четверти -> velocity), и
     // каждому событию ставим активную громкость на его startBeat. AudioEngine
     // получает готовый velocity — без повторных расчётов и без оттенков на ноте.
+    // Старты тактов разные при сменах размера, поэтому таймлайн строим по starts.
     const timelines = {};
     for (let vi = 0; vi < voiceIds.length; vi++) {
-        timelines[voiceIds[vi]] = dynamicsTimeline(measures, voiceIds[vi], measureQ);
+        timelines[voiceIds[vi]] = dynamicsTimeline(measures, voiceIds[vi], starts);
     }
     let events = [];
 
     for (let mi = 0; mi < measures.length; mi++) {
-        const base = mi * measureQ;
+        const base = starts[mi];
+        const measureQ = capsQ[mi]; // ёмкость ЭТОГО такта (четверти)
         // Альтерации действующей тональности этого такта. Сброс знаков такта
         // (measureAcc ниже) уже происходит на каждый такт/голос, поэтому смена
         // тональности корректно начинает новый контекст без утечки знаков.
@@ -132,8 +141,13 @@ export function compilePlayback(payload) {
     events.sort(function (a, b) { return a.startBeat - b.startBeat; });
     return {
         events: events,
-        totalBeats: measures.length * measureQ,
-        beats: beats, beatValue: beatValue, measureQ: measureQ,
+        totalBeats: totalBeats,
+        // Сетка тактов для планировщика: абсолютные старты (+финал) и ёмкости
+        // (четверти) КАЖДОГО такта — единый источник для playhead/строк (вместо
+        // прежнего глобального measureQ). Метроном — готовая сетка щелчков с
+        // акцентами (по долям каждого такта), считается в domain/timesig.
+        starts: starts, capsQ: capsQ,
+        clicks: metronomeClicks(effTs, starts),
         isDrums: isDrums, primaryVoice: isDrums ? 'perc' : 'treble',
     };
 }

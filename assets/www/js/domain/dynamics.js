@@ -40,15 +40,22 @@ export function velocityOf(markId) {
 // Таймлайн оттенков ОДНОГО голоса по всей партитуре: отсортированный массив
 // { beat (абсолютные четверти), velocity }. Оттенки хранятся в render-проекции
 // под measures[mi]._dyn[voiceId] = [{ mark, beat }].
-export function dynamicsTimeline(measures, voiceId, measureQ) {
+//
+// [bases] — абсолютное начало каждого такта в четвертях. Принимает ЛИБО массив
+// стартов по индексу такта (mid-score смены размера: разная ёмкость тактов —
+// см. domain/timesig.measureStarts), ЛИБО число (единый measureQ для всех
+// тактов: base = mi·measureQ — обратная совместимость).
+export function dynamicsTimeline(measures, voiceId, bases) {
+    const arr = Array.isArray(bases);
     const out = [];
     for (let mi = 0; mi < measures.length; mi++) {
         const m = measures[mi];
         const dyn = m && m._dyn && m._dyn[voiceId];
         if (!dyn) continue;
+        const base = arr ? (bases[mi] || 0) : mi * bases;
         for (let i = 0; i < dyn.length; i++) {
             out.push({
-                beat: mi * measureQ + (dyn[i].beat || 0),
+                beat: base + (dyn[i].beat || 0),
                 velocity: velocityOf(dyn[i].mark),
             });
         }
