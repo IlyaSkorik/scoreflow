@@ -16,6 +16,10 @@ const List<String> _keySignatures = [
   'C', 'G', 'D', 'A', 'E', 'B', 'F#', 'F', 'Bb', 'Eb', 'Ab', 'Db'
 ];
 
+/// Служебное значение пикера тональности «Без смены» (убрать смену в такте).
+/// Не пересекается с именами тональностей VexFlow.
+const String _kInheritKey = '__inherit__';
+
 /// Размеры такта для пикера в листе «Ещё».
 const List<String> _timeSignatures = [
   '4/4', '3/4', '2/4', '2/2', '6/8', '9/8', '12/8', '5/8', '7/8', '3/8'
@@ -204,6 +208,10 @@ class _EditorScreenState extends State<EditorScreen> {
     final beatValue = s.timeSignature.beatValue;
     final cv = _cursor.voice;
     final keepCount = s.measures.length;
+    // Смены тональности — ПОЗИЦИОННЫЕ якоря (привязаны к НОМЕРУ такта, как
+    // размер), а не к нотам. При перепаковке нот их сохраняем по индексу такта,
+    // чтобы reflow не «сдвигал» и не терял ключевые смены.
+    final keysByIndex = s.measures.map((m) => m.keySignature).toList();
 
     // нота под курсором (по ссылке), чтобы потом вернуть курсор на неё.
     // Авто-паузы добивки пересоздаются — на них курсор не закрепляем.
@@ -231,10 +239,14 @@ class _EditorScreenState extends State<EditorScreen> {
     final count = maxBins > keepCount ? maxBins : keepCount;
     final measures = <Measure>[];
     for (var i = 0; i < count; i++) {
-      measures.add(Measure({
-        for (final v in s.instrument.voiceIds)
-          v: i < bins[v]!.length ? bins[v]![i] : <MusicNote>[],
-      }));
+      measures.add(Measure(
+        {
+          for (final v in s.instrument.voiceIds)
+            v: i < bins[v]!.length ? bins[v]![i] : <MusicNote>[],
+        },
+        // Смена тональности остаётся на своём такте (позиционный якорь).
+        keySignature: i < keysByIndex.length ? keysByIndex[i] : null,
+      ));
     }
 
     // Целостность такта: каждый частично заполненный такт добиваем
@@ -827,6 +839,35 @@ class _EditorScreenState extends State<EditorScreen> {
     if (_isPlaying) _sendPlayback('PLAY');
   }
 
+  /// Инструмент «Тональность» — вставка/смена/удаление тональности С НАЧАЛА
+  /// текущего такта (профессиональная смена тональности по месту).
+  ///
+  /// Такт 0 — это НАЧАЛЬНАЯ тональность партитуры: на нём меняем
+  /// [Score.keySignature] (и снимаем избыточный позиционный `_key` такта 0).
+  /// Такт > 0: [key]==null убирает смену; иначе ставит её. Если выбранная
+  /// тональность совпадает с действующей в предыдущем такте — смены нет (храним
+  /// null): движок ничего не дорисует и не переключит playback («не рисовать,
+  /// если не изменилось»).
+  ///
+  /// Идёт через обычный пайплайн (_commit -> normalize -> render -> persist ->
+  /// Undo/Redo): немедленный перерендер, автосейв, отмена/повтор. Для ударных
+  /// тональности нет — операция неприменима.
+  void _setMeasureKey(String? key) {
+    if (_score!.instrument == InstrumentType.drums) return;
+    final m = _cursor.measure;
+    _commit(() {
+      if (m == 0) {
+        _score!.keySignature = key ?? 'C';
+        _score!.measures[0].keySignature = null;
+      } else if (key == null) {
+        _score!.measures[m].keySignature = null;
+      } else {
+        final prev = _score!.effectiveKeySignatureAt(m - 1);
+        _score!.measures[m].keySignature = (key == prev) ? null : key;
+      }
+    });
+  }
+
   /// Нижний лист «Ещё» — редкие действия вне рабочей зоны: точный темп,
   /// sustain (фортепиано), параметры партитуры (тональность/размер),
   /// добавление такта, переименование, экспорт PDF.
@@ -883,27 +924,51 @@ class _EditorScreenState extends State<EditorScreen> {
                       setSheet(() {});
                     },
                   ),
+                // Тональность — контекстно к ТАКТУ под курсором: такт 1 задаёт
+                // начальную тональность партитуры, такты >1 — смену по месту
+                // (вставка/смена/удаление). Действующая тональность показана в
+                // подзаголовке. Смена немедленно перерендерит экран/PDF и
+                // playback, попадёт в Undo/Redo и автосейв.
                 if (isPiano)
-                  ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                    leading: const Icon(Icons.music_note),
-                    title: const Text('Тональность'),
-                    trailing: DropdownButton<String>(
-                      value: _keySignatures.contains(score.keySignature)
-                          ? score.keySignature
-                          : null,
-                      hint: Text(score.keySignature),
-                      items: [
-                        for (final k in _keySignatures)
-                          DropdownMenuItem(value: k, child: Text(k))
-                      ],
-                      onChanged: (v) {
-                        if (v == null) return;
-                        _commit(() => score.keySignature = v);
-                        setSheet(() {});
-                      },
-                    ),
-                  ),
+                  Builder(builder: (ctx) {
+                    final m = _cursor.measure;
+                    final atStart = m == 0;
+                    final eff = score.effectiveKeySignatureAt(m);
+                    final own = atStart
+                        ? score.keySignature
+                        : score.measures[m].keySignature;
+                    final String? ddValue = atStart
+                        ? (_keySignatures.contains(own) ? own : null)
+                        : (own == null
+                            ? _kInheritKey
+                            : (_keySignatures.contains(own) ? own : null));
+                    return ListTile(
+                      contentPadding:
+                          const EdgeInsets.symmetric(horizontal: 8),
+                      leading: const Icon(Icons.music_note),
+                      title: Text(atStart
+                          ? 'Тональность'
+                          : 'Тональность (такт ${m + 1})'),
+                      subtitle:
+                          atStart ? null : Text('Действует: $eff'),
+                      trailing: DropdownButton<String>(
+                        value: ddValue,
+                        hint: Text(atStart ? eff : 'Без смены'),
+                        items: [
+                          if (!atStart)
+                            const DropdownMenuItem(
+                                value: _kInheritKey, child: Text('Без смены')),
+                          for (final k in _keySignatures)
+                            DropdownMenuItem(value: k, child: Text(k)),
+                        ],
+                        onChanged: (v) {
+                          if (v == null) return;
+                          _setMeasureKey(v == _kInheritKey ? null : v);
+                          setSheet(() {});
+                        },
+                      ),
+                    );
+                  }),
                 ListTile(
                   contentPadding: const EdgeInsets.symmetric(horizontal: 8),
                   leading: const Icon(Icons.straighten),
