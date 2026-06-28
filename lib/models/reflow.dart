@@ -20,29 +20,62 @@ double onsetBeats(List<MusicNote> notes, int index) {
   return q;
 }
 
+/// Кумулятивные доли (в ЧЕТВЕРТЯХ) начала каждого такта для [count] тактов:
+/// starts[0]=0, starts[i]=Σ measureQAt(0..i-1). [measureQAt] — четвертей в такте
+/// по ИНДЕКСУ (разный для разных размеров). Зеркало движкового
+/// domain/timesig.measureStarts. Возвращает [count]+1 элементов (последний =
+/// общая длина), чтобы по нему искать индекс такта по абсолютной доле.
+List<double> measureStarts(int count, double Function(int) measureQAt) {
+  final out = <double>[0.0];
+  var acc = 0.0;
+  for (var i = 0; i < count; i++) {
+    acc += measureQAt(i);
+    out.add(acc);
+  }
+  return out;
+}
+
+/// Индекс такта, в который попадает абсолютная доля [abs] (четверти), по
+/// предрассчитанным [starts] (см. [measureStarts]). Клампится в [0, count-1].
+int measureIndexAtBeat(List<double> starts, double abs) {
+  final count = starts.length - 1;
+  if (count <= 0) return 0;
+  var idx = 0;
+  for (var i = 0; i < count; i++) {
+    if (starts[i] <= abs + 1e-9) {
+      idx = i;
+    } else {
+      break;
+    }
+  }
+  return idx;
+}
+
 /// Перепривязывает динамические оттенки к НОВОЙ раскладке тактов по АБСОЛЮТНОЙ
 /// доле, сохраняя их музыкальную позицию при reflow (как в проф. редакторах:
 /// оттенок остаётся на своей доле, даже если ноты переехали в другой такт).
+/// МЕТР-ОСОЗНАННАЯ версия: ёмкость такта берётся по индексу из [measureQAt]
+/// (четверти), поэтому смены размера не сбивают позиции оттенков.
 ///
 /// [from] — такты ДО перепаковки (источник оттенков и их абсолютных позиций),
 /// [to] — НОВЫЕ такты (их списки оттенков очищаются и заполняются заново).
-/// [measureQ] — четвертей в такте (beats·4/beatValue). Один оттенок на
-/// (голос+доля): совпадающие по доле схлопываются (побеждает последний).
-void reflowDynamics(
-    List<Measure> from, List<Measure> to, double measureQ) {
+/// Смены размера — ПОЗИЦИОННЫЕ якоря по индексу такта (не двигаются при reflow),
+/// поэтому одна и та же [measureQAt] описывает и старую, и новую раскладку.
+void reflowDynamicsVariable(
+    List<Measure> from, List<Measure> to, double Function(int) measureQAt) {
   for (final m in to) {
     m.dynamics.clear();
   }
-  if (measureQ <= 0 || to.isEmpty) return;
+  if (to.isEmpty) return;
+  final fromStarts = measureStarts(from.length, measureQAt);
+  final toStarts = measureStarts(to.length, measureQAt);
   for (var mi = 0; mi < from.length; mi++) {
-    final base = mi * measureQ;
+    final base = fromStarts[mi];
     from[mi].dynamics.forEach((voice, list) {
       for (final d in list) {
         final abs = base + d.beat;
-        var idx = (abs / measureQ + 1e-9).floor();
-        if (idx < 0) idx = 0;
-        if (idx >= to.length) idx = to.length - 1;
-        final local = abs - idx * measureQ;
+        final idx = measureIndexAtBeat(toStarts, abs);
+        final local = abs - toStarts[idx];
         final dest = to[idx].dynamicsOf(voice);
         dest.removeWhere((e) => (e.beat - local).abs() < 1e-6);
         dest.add(Dynamic(mark: d.mark, voice: voice, beat: local));
@@ -50,6 +83,19 @@ void reflowDynamics(
       }
     });
   }
+}
+
+/// Перепривязка оттенков при ЕДИНОМ размере по всей партитуре (обратная
+/// совместимость): [measureQ] — четвертей в такте, одинаково для всех тактов.
+/// Тонкая обёртка над [reflowDynamicsVariable] — без дублирования логики.
+void reflowDynamics(List<Measure> from, List<Measure> to, double measureQ) {
+  if (measureQ <= 0) {
+    for (final m in to) {
+      m.dynamics.clear();
+    }
+    return;
+  }
+  reflowDynamicsVariable(from, to, (_) => measureQ);
 }
 
 /// Разбивает поток нот одного голоса на «чанки» — неделимые при раскладке
@@ -89,21 +135,26 @@ List<List<MusicNote>> tupletChunks(List<MusicNote> notes) {
 }
 
 /// Раскладывает поток нот одного голоса по тактам так, чтобы сумма РЕАЛЬНЫХ
-/// длительностей в каждом такте не превышала [capacity] (доля от целой ноты).
+/// длительностей в каждом такте не превышала ёмкости ЭТОГО такта.
+/// МЕТР-ОСОЗНАННАЯ версия: ёмкость берётся по индексу корзины из [capacityAt]
+/// (доля от целой ноты — 4/4 → 1.0, 7/8 → 0.875), поэтому смены размера задают
+/// разную вместимость каждому такту. Глобального размера здесь нет.
 ///
 /// Единица переноса — «чанк» (см. [tupletChunks]): одиночная нота или целая
 /// tuplet-группа. Чанк не расщепляется: если не влезает в текущий такт —
-/// целиком переносится в следующий. Чанк, чья длительность сама по себе больше
-/// размера такта (редкий край), занимает отдельный такт. Всегда возвращает
-/// минимум одну (возможно пустую) корзину.
-List<List<MusicNote>> packVoice(List<MusicNote> notes, double capacity) {
+/// целиком переносится в следующий (где ёмкость уже соответствует его индексу).
+/// Чанк, чья длительность сама по себе больше размера такта (редкий край),
+/// занимает отдельный такт. Всегда возвращает минимум одну (возможно пустую)
+/// корзину.
+List<List<MusicNote>> packVoiceVariable(
+    List<MusicNote> notes, double Function(int) capacityAt) {
   final bins = <List<MusicNote>>[];
   var current = <MusicNote>[];
   var sum = 0.0;
 
   for (final chunk in tupletChunks(notes)) {
     final f = chunk.fold<double>(0, (s, n) => s + noteTime(n));
-    if (current.isNotEmpty && sum + f > capacity + 1e-6) {
+    if (current.isNotEmpty && sum + f > capacityAt(bins.length) + 1e-6) {
       bins.add(current);
       current = <MusicNote>[];
       sum = 0;
@@ -114,6 +165,12 @@ List<List<MusicNote>> packVoice(List<MusicNote> notes, double capacity) {
   if (current.isNotEmpty || bins.isEmpty) bins.add(current);
   return bins;
 }
+
+/// Раскладка при ЕДИНОМ размере по всей партитуре (обратная совместимость):
+/// [capacity] — доля от целой ноты, одинаково для всех тактов. Тонкая обёртка
+/// над [packVoiceVariable] — без дублирования логики упаковки.
+List<List<MusicNote>> packVoice(List<MusicNote> notes, double capacity) =>
+    packVoiceVariable(notes, (_) => capacity);
 
 // =====================================================================
 //  Каноническая добивка такта паузами
