@@ -92,6 +92,7 @@ Secondary goals:
   * Initial key
   * Mid-score key changes (per measure)
   * Automatic courtesy naturals
+  * Local accidental normalization on key change
   * Playback updates after key change
   * Reflow-safe positional anchor
 * [x] Time signatures
