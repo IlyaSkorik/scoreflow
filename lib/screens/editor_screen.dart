@@ -21,10 +21,16 @@ const List<String> _keySignatures = [
 /// Не пересекается с именами тональностей VexFlow.
 const String _kInheritKey = '__inherit__';
 
-/// Размеры такта для пикера в листе «Ещё».
+/// Размеры такта (пресеты) для пикера в листе «Ещё».
 const List<String> _timeSignatures = [
-  '4/4', '3/4', '2/4', '2/2', '6/8', '9/8', '12/8', '5/8', '7/8', '3/8'
+  '2/4', '3/4', '4/4', '5/4', '6/8', '7/8', '9/8', '12/8', '2/2', '3/8', '5/8'
 ];
+
+/// Служебное значение пикера размера «Без смены» (убрать смену в такте).
+const String _kInheritTime = '__inherit_ts__';
+
+/// Служебное значение пикера размера «Другой…» (ввод произвольного n/d).
+const String _kCustomTime = '__custom_ts__';
 
 /// Редактор партитуры: WebView-рендер (VexFlow) + панель ввода нот + плеер.
 class EditorScreen extends StatefulWidget {
@@ -94,9 +100,6 @@ class _EditorScreenState extends State<EditorScreen> {
 
   List<MusicNote> get _activeVoice =>
       _voiceOf(_score!, _cursor.measure, _cursor.voice);
-
-  double get _capacity =>
-      _score!.timeSignature.beats / _score!.timeSignature.beatValue;
 
   // Заполненность реальным материалом — авто-паузы добивки не учитываем,
   // иначе индикатор всегда показывал бы «полный такт».
@@ -204,15 +207,21 @@ class _EditorScreenState extends State<EditorScreen> {
   /// ноты. Пустые такты, добавленные вручную, не теряются.
   void _normalize() {
     final s = _score!;
-    final cap = _capacity;
-    final beats = s.timeSignature.beats;
-    final beatValue = s.timeSignature.beatValue;
     final cv = _cursor.voice;
     final keepCount = s.measures.length;
-    // Смены тональности — ПОЗИЦИОННЫЕ якоря (привязаны к НОМЕРУ такта, как
-    // размер), а не к нотам. При перепаковке нот их сохраняем по индексу такта,
-    // чтобы reflow не «сдвигал» и не терял ключевые смены.
+    // Смены тональности И размера — ПОЗИЦИОННЫЕ якоря (привязаны к НОМЕРУ такта,
+    // а не к нотам). При перепаковке нот их сохраняем по индексу такта, чтобы
+    // reflow не «сдвигал» и не терял смены.
     final keysByIndex = s.measures.map((m) => m.keySignature).toList();
+    final tsByIndex = s.measures.map((m) => m.timeSignature).toList();
+
+    // ДЕЙСТВУЮЩИЙ размер такта по индексу — ЕДИНЫЙ источник ёмкости. Смены
+    // размера позиционны (по индексу), поэтому одна функция описывает и старую,
+    // и новую раскладку. За пределами текущего списка тактов размер тянется
+    // последним известным (effectiveTimeSignatureAt клампит индекс).
+    TimeSignature effTsAt(int i) => s.effectiveTimeSignatureAt(i);
+    double capAt(int i) => effTsAt(i).capacity; // доля от целой ноты
+    double measureQAt(int i) => effTsAt(i).capacity * 4; // четверти
 
     // нота под курсором (по ссылке), чтобы потом вернуть курсор на неё.
     // Авто-паузы добивки пересоздаются — на них курсор не закрепляем.
@@ -223,7 +232,7 @@ class _EditorScreenState extends State<EditorScreen> {
             ? curList[_cursor.index]
             : null;
 
-    // упаковка каждого голоса в «корзины» (такты) по capacity.
+    // упаковка каждого голоса в «корзины» (такты) по ёмкости КАЖДОГО такта.
     // Авто-паузы выбрасываем перед упаковкой — иначе добивка накапливалась бы.
     final bins = <String, List<List<MusicNote>>>{};
     var maxBins = 1;
@@ -232,7 +241,7 @@ class _EditorScreenState extends State<EditorScreen> {
       for (final m in s.measures) {
         flat.addAll(m.voice(v).where((n) => !n.auto));
       }
-      final packed = packVoice(flat, cap);
+      final packed = packVoiceVariable(flat, capAt);
       bins[v] = packed;
       if (packed.length > maxBins) maxBins = packed.length;
     }
@@ -245,29 +254,33 @@ class _EditorScreenState extends State<EditorScreen> {
           for (final v in s.instrument.voiceIds)
             v: i < bins[v]!.length ? bins[v]![i] : <MusicNote>[],
         },
-        // Смена тональности остаётся на своём такте (позиционный якорь).
+        // Смены тональности/размера остаются на своём такте (позиционный якорь).
         keySignature: i < keysByIndex.length ? keysByIndex[i] : null,
+        timeSignature: i < tsByIndex.length ? tsByIndex[i] : null,
       ));
     }
 
     // Целостность такта: каждый частично заполненный такт добиваем
-    // каноническими паузами. Полностью пустые такты оставляем пустыми —
-    // движок рисует им целую паузу (центрированную, как принято).
-    for (final m in measures) {
+    // каноническими паузами по ДЕЙСТВУЮЩЕМУ размеру ЭТОГО такта. Полностью
+    // пустые такты оставляем пустыми — движок рисует им целую паузу.
+    for (var mi = 0; mi < measures.length; mi++) {
+      final m = measures[mi];
+      final ts = effTsAt(mi);
+      final cap = ts.capacity;
       for (final v in s.instrument.voiceIds) {
         final notes = m.voice(v);
         if (notes.isEmpty) continue;
         final filled = notes.fold(0.0, (sum, n) => sum + noteTime(n));
         final remainder = cap - filled;
         if (remainder > 1e-6) {
-          notes.addAll(fillRests(filled, remainder, beats, beatValue));
+          notes.addAll(fillRests(filled, remainder, ts.beats, ts.beatValue));
         }
       }
     }
     // Оттенки переезжают вместе с музыкой: перепривязка по абсолютной доле к
-    // новой раскладке (measureQ в четвертях = capacity·4). Делаем ДО подмены
-    // s.measures — источник позиций — прежняя раскладка.
-    reflowDynamics(s.measures, measures, cap * 4);
+    // новой раскладке (measureQ в четвертях, разный для разных размеров).
+    // Делаем ДО подмены s.measures — источник позиций — прежняя раскладка.
+    reflowDynamicsVariable(s.measures, measures, measureQAt);
     s.measures = measures;
 
     // вернуть курсор на ту же ноту (или подровнять в границы)
@@ -693,6 +706,81 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
+  /// Диалог произвольного размера: числитель (1..32) и знаменатель (степень
+  /// двойки: 1,2,4,8,16). Возвращает строку "n/d" или null. Архитектура остаётся
+  /// расширяемой под кастомную группировку долей (beat grouping) в будущем.
+  Future<String?> _pickCustomTimeSignature(TimeSignature current) async {
+    var beats = current.beats.clamp(1, 32);
+    var beatValue = const [1, 2, 4, 8, 16].contains(current.beatValue)
+        ? current.beatValue
+        : 4;
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('Произвольный размер'),
+          content: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('Доли'),
+                    DropdownButton<int>(
+                      value: beats,
+                      isExpanded: true,
+                      items: [
+                        for (var i = 1; i <= 32; i++)
+                          DropdownMenuItem(value: i, child: Text('$i'))
+                      ],
+                      onChanged: (v) =>
+                          setLocal(() => beats = v ?? beats),
+                    ),
+                  ],
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 8),
+                child: Text('/', style: TextStyle(fontSize: 24)),
+              ),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('Длительность'),
+                    DropdownButton<int>(
+                      value: beatValue,
+                      isExpanded: true,
+                      items: const [
+                        DropdownMenuItem(value: 1, child: Text('1')),
+                        DropdownMenuItem(value: 2, child: Text('2')),
+                        DropdownMenuItem(value: 4, child: Text('4')),
+                        DropdownMenuItem(value: 8, child: Text('8')),
+                        DropdownMenuItem(value: 16, child: Text('16')),
+                      ],
+                      onChanged: (v) =>
+                          setLocal(() => beatValue = v ?? beatValue),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Отмена')),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, '$beats/$beatValue'),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _moveNote(int delta) {
     _commit(() {
       final len = _activeVoice.length;
@@ -880,6 +968,36 @@ class _EditorScreenState extends State<EditorScreen> {
     });
   }
 
+  /// Инструмент «Размер» — вставка/смена/удаление размера С НАЧАЛА текущего
+  /// такта (профессиональная смена метра по месту, как в MuseScore/Dorico).
+  ///
+  /// Такт 0 — это НАЧАЛЬНЫЙ размер партитуры: на нём меняем [Score.timeSignature]
+  /// (и снимаем избыточный позиционный `_ts` такта 0). Такт > 0: [ts]==null
+  /// убирает смену; иначе ставит её. Если выбранный размер совпадает с
+  /// действующим в предыдущем такте — смены нет (храним null): движок ничего не
+  /// дорисует («не рисовать, если не изменилось»).
+  ///
+  /// Идёт через обычный пайплайн (_commit -> normalize -> render -> persist ->
+  /// Undo/Redo). Нормализация немедленно перепакует ноты под новую ёмкость
+  /// тактов: переполнение уезжает вперёд, нехватка добивается паузами — ноты не
+  /// теряются и не дублируются (см. [_normalize]/[packVoiceVariable]).
+  void _setMeasureTimeSignature(String? ts) {
+    final m = _cursor.measure;
+    _commit(() {
+      if (m == 0) {
+        _score!.timeSignature =
+            ts == null ? TimeSignature.common : TimeSignature.parse(ts);
+        _score!.measures[0].timeSignature = null;
+      } else if (ts == null) {
+        _score!.measures[m].timeSignature = null;
+      } else {
+        final prev = _score!.effectiveTimeSignatureAt(m - 1);
+        final parsed = TimeSignature.parse(ts);
+        _score!.measures[m].timeSignature = (parsed == prev) ? null : parsed;
+      }
+    });
+  }
+
   /// Нижний лист «Ещё» — редкие действия вне рабочей зоны: точный темп,
   /// sustain (фортепиано), параметры партитуры (тональность/размер),
   /// добавление такта, переименование, экспорт PDF.
@@ -981,27 +1099,66 @@ class _EditorScreenState extends State<EditorScreen> {
                       ),
                     );
                   }),
-                ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                  leading: const Icon(Icons.straighten),
-                  title: const Text('Размер'),
-                  trailing: DropdownButton<String>(
-                    value: _timeSignatures.contains(score.timeSignature.vex)
-                        ? score.timeSignature.vex
-                        : null,
-                    hint: Text(score.timeSignature.vex),
-                    items: [
-                      for (final t in _timeSignatures)
-                        DropdownMenuItem(value: t, child: Text(t))
-                    ],
-                    onChanged: (v) {
-                      if (v == null) return;
-                      _commit(
-                          () => score.timeSignature = TimeSignature.parse(v));
-                      setSheet(() {});
-                    },
-                  ),
-                ),
+                // Размер — контекстно к ТАКТУ под курсором: такт 1 задаёт
+                // начальный размер партитуры, такты >1 — смену по месту
+                // (вставка/смена/удаление). Действующий размер показан в
+                // подзаголовке. Смена немедленно перепакует ноты под новую
+                // ёмкость, перерендерит экран/PDF/playback, попадёт в Undo/Redo
+                // и автосейв. Доступно обоим инструментам (метр есть и у ударных).
+                Builder(builder: (ctx) {
+                  final m = _cursor.measure;
+                  final atStart = m == 0;
+                  final eff = score.effectiveTimeSignatureAt(m).vex;
+                  final own = atStart
+                      ? score.timeSignature.vex
+                      : score.measures[m].timeSignature?.vex;
+                  final String? ddValue = atStart
+                      ? (_timeSignatures.contains(own) ? own : _kCustomTime)
+                      : (own == null
+                          ? _kInheritTime
+                          : (_timeSignatures.contains(own)
+                              ? own
+                              : _kCustomTime));
+                  return ListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                    leading: const Icon(Icons.straighten),
+                    title: Text(
+                        atStart ? 'Размер' : 'Размер (такт ${m + 1})'),
+                    subtitle: atStart ? null : Text('Действует: $eff'),
+                    trailing: DropdownButton<String>(
+                      value: ddValue,
+                      hint: Text(atStart ? eff : 'Без смены'),
+                      items: [
+                        if (!atStart)
+                          const DropdownMenuItem(
+                              value: _kInheritTime, child: Text('Без смены')),
+                        for (final t in _timeSignatures)
+                          DropdownMenuItem(value: t, child: Text(t)),
+                        // Текущий нестандартный размер виден как выбранный пункт.
+                        if (own != null && !_timeSignatures.contains(own))
+                          DropdownMenuItem(
+                              value: _kCustomTime, child: Text('$own (своё)')),
+                        const DropdownMenuItem(
+                            value: _kCustomTime, child: Text('Другой…')),
+                      ],
+                      onChanged: (v) async {
+                        if (v == null) return;
+                        if (v == _kInheritTime) {
+                          _setMeasureTimeSignature(null);
+                        } else if (v == _kCustomTime) {
+                          final custom = await _pickCustomTimeSignature(
+                              score.effectiveTimeSignatureAt(m));
+                          if (custom != null) {
+                            _setMeasureTimeSignature(custom);
+                          }
+                        } else {
+                          _setMeasureTimeSignature(v);
+                        }
+                        setSheet(() {});
+                      },
+                    ),
+                  );
+                }),
                 const Divider(height: 8),
                 ListTile(
                   contentPadding: const EdgeInsets.symmetric(horizontal: 8),
@@ -1046,8 +1203,11 @@ class _EditorScreenState extends State<EditorScreen> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    final filledBeats = _filled(_activeVoice) * score.timeSignature.beatValue;
-    final totalBeats = score.timeSignature.beats;
+    // Индикатор заполнения — по ДЕЙСТВУЮЩЕМУ размеру такта под курсором
+    // (mid-score смены размера учитываются).
+    final curTs = score.effectiveTimeSignatureAt(_cursor.measure);
+    final filledBeats = _filled(_activeVoice) * curTs.beatValue;
+    final totalBeats = curTs.beats;
 
     return Scaffold(
       appBar: AppBar(
