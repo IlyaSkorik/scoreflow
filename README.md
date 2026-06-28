@@ -77,6 +77,7 @@ Unlike traditional desktop-first notation software, ScoreFlow is designed with a
 | Mid-score key changes  |    ✅   |
 | Courtesy naturals      |    ✅   |
 | Time signatures        |    ✅   |
+| Mid-score meter changes|    ✅   |
 | Professional beaming   |    ✅   |
 | Automatic rest filling |    ✅   |
 | Undo / Redo            |    ✅   |

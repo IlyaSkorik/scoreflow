@@ -4,7 +4,8 @@
 > against the actual codebase, not aspirations.
 >
 > Last reviewed: **2026-06-29** · Flutter 3.44.3 · Material 3 · VexFlow 4.2.2 · ES Modules.
-> Latest: mid-score key signature changes with courtesy naturals.
+> Latest: mid-score time signature changes (per-measure meter, meter-aware reflow,
+> per-measure beaming & playback grid).
 
 ---
 
@@ -96,6 +97,15 @@ Secondary goals:
   * Playback updates after key change
   * Reflow-safe positional anchor
 * [x] Time signatures
+
+  * Initial meter
+  * Mid-score meter changes (per measure)
+  * Per-measure measure capacity (no global meter)
+  * Meter-aware reflow (overflow/fill preserve notes, ties, tuplets, dynamics)
+  * Per-measure professional beaming
+  * Compound & irregular meters (6/8, 7/8, 9/8, 12/8, 5/8 …)
+  * Playback meter grid + per-measure metronome accents
+  * Reflow-safe positional anchor
 * [x] Accidentals
 
   * Sharp
@@ -201,13 +211,6 @@ Secondary goals:
 # Next Priorities
 
 ## 🎼 Musical Core (Highest Priority)
-
-### Time Signatures
-
-* [ ] Mid-score time signature changes
-* [ ] Automatic reflow after meter changes
-
----
 
 ### Barlines
 
