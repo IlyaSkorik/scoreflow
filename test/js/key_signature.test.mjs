@@ -120,6 +120,25 @@ console.log('compilePlayback — explicit accidental still overrides key:');
         [[65], [65], [65]]);
 }
 
+console.log('compilePlayback — accidental normalization preserves sound:');
+{
+    // Инвариант редакторской нормализации (Dart models/keysig): удаление
+    // ИЗБЫТОЧНОГО знака (дающего ту же высоту, что тональность) не меняет звук.
+    // До: F# явный в G-dur. После: без знака (следует тональности G -> F#).
+    const before = compilePlayback(piano('G', [M([N(['f#/4'])])]));
+    const after = compilePlayback(piano('G', [M([N(['f/4'])])]));
+    eq('redundant sharp removal: identical midis',
+        trebleMidis(after), trebleMidis(before));
+}
+{
+    // Внутритактовый перенос: F-натурал (значим) затем F# (обязателен) — после
+    // нормализации запись не меняется, звук [F, F#] сохраняется.
+    const comp = compilePlayback(piano('G', [
+        M([N(['fn/4']), N(['f#/4'])]),
+    ]));
+    eq('kept natural + sharp -> [F, F#]', trebleMidis(comp), [[65], [66]]);
+}
+
 if (failed > 0) {
     console.log('\n' + failed + ' assertion(s) FAILED');
     process.exit(1);
