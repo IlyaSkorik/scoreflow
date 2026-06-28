@@ -74,6 +74,8 @@ Unlike traditional desktop-first notation software, ScoreFlow is designed with a
 | Accidentals            |    ✅   |
 | Dynamics               |    ✅   |
 | Key signatures         |    ✅   |
+| Mid-score key changes  |    ✅   |
+| Courtesy naturals      |    ✅   |
 | Time signatures        |    ✅   |
 | Professional beaming   |    ✅   |
 | Automatic rest filling |    ✅   |

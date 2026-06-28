@@ -4,6 +4,7 @@
 > against the actual codebase, not aspirations.
 >
 > Last reviewed: **2026-06-29** · Flutter 3.44.3 · Material 3 · VexFlow 4.2.2 · ES Modules.
+> Latest: mid-score key signature changes with courtesy naturals.
 
 ---
 
@@ -87,6 +88,12 @@ Secondary goals:
 ### Musical Symbols
 
 * [x] Key signatures
+
+  * Initial key
+  * Mid-score key changes (per measure)
+  * Automatic courtesy naturals
+  * Playback updates after key change
+  * Reflow-safe positional anchor
 * [x] Time signatures
 * [x] Accidentals
 
@@ -193,14 +200,6 @@ Secondary goals:
 # Next Priorities
 
 ## 🎼 Musical Core (Highest Priority)
-
-### Key Signatures
-
-* [ ] Mid-score key signature changes
-* [ ] Automatic courtesy naturals
-* [ ] Playback updates after key change
-
----
 
 ### Time Signatures
 
