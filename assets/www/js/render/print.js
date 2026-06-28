@@ -14,6 +14,7 @@ import { el } from '../utils/dom.js';
 import { state } from '../utils/state.js';
 import { buildVoice, beamGroups, buildTuplets, measureMinWidth } from './layout.js';
 import { voiceListOf, nextRealNote, sameKeys } from '../domain/notes.js';
+import { effectiveKeys, cancelKeyFor } from '../domain/keysig.js';
 import { drawDynamic } from './dynamics.js';
 import { dynamicsBaseline } from './dynamics_layout.js';
 import { noteOnsets, indexAtBeat } from '../domain/dynamics.js';
@@ -64,15 +65,29 @@ function newPage(root) {
     return r.getContext();
 }
 
-// Ширина «головы» стана: ключ + ключевые знаки [+ размер].
-function headWidth(VF, ctx, cfg, keySig, timeSig, withTime) {
+// Ширина «головы» стана: ключ + ключевые знаки [+ бекары-отмена] [+ размер].
+function headWidth(VF, ctx, cfg, keySig, timeSig, withTime, cancelSig) {
     const s = new VF.Stave(0, 0, 400);
     s.addClef(cfg.staves[0].clef);
-    if (cfg.keySig && keySig) s.addKeySignature(keySig);
+    if (cfg.keySig && keySig) s.addKeySignature(keySig, cancelSig || undefined);
     if (withTime && timeSig) s.addTimeSignature(timeSig);
     s.setContext(ctx);
     s.format();
     return s.getNoteStartX() - s.getX();
+}
+
+// Дополнительная ширина смены тональности В СЕРЕДИНЕ системы (стан без ключа):
+// насколько ключевые знаки [+ бекары-отмена] сдвигают начало нот относительно
+// голого такта. Нужна, чтобы такт со сменой получил место и не сжал ноты.
+function midKeyWidth(VF, ctx, keyName, cancelName) {
+    const bare = new VF.Stave(0, 0, 400);
+    bare.setContext(ctx);
+    bare.format();
+    const s = new VF.Stave(0, 0, 400);
+    s.addKeySignature(keyName, cancelName || undefined);
+    s.setContext(ctx);
+    s.format();
+    return Math.max(0, s.getNoteStartX() - bare.getNoteStartX());
 }
 
 function textWidth(ctx, str, approxCharW) {
@@ -99,13 +114,22 @@ function drawTitle(ctx, title, composer) {
 // номер системы, [registry] — реестр noteId -> {sn, ctx, sys} для
 // последующего прохода лиг (Tie/Slur), общий на всю печать.
 function drawSystem(VF, ctx, sys, measures, cfg, yTop, beats, beatValue,
-                    keySig, timeSig, sysIndex, registry, staveReg) {
+                    effKeys, timeSig, sysIndex, registry, staveReg) {
     let x = PAGE.mx;
+    // Тональность головы системы (+ бекары-отмена, если система начинается со
+    // смены) — действующая тональность первого такта системы.
+    const f = sys.firstMeasure;
+    const sysKey = effKeys ? effKeys[f] : null;
+    const sysCancel = (effKeys && f > 0) ? cancelKeyFor(effKeys[f - 1], effKeys[f]) : null;
     sys.items.forEach(function (idx, pos) {
         const isFirst = (pos === 0);
         const withTime = isFirst && sys.firstMeasure === 0;
         const content = sys.widths[idx];
         const staveW = (isFirst ? sys.L : 0) + content;
+        // Смена тональности В СЕРЕДИНЕ системы (не первый такт) — сразу после
+        // барлайна, с бекарами-отменой по правилам гравировки (VexFlow cancelKey).
+        const midCancel = (effKeys && idx > 0) ? cancelKeyFor(effKeys[idx - 1], effKeys[idx]) : null;
+        const midChange = !isFirst && cfg.keySig && midCancel != null;
 
         // Свежие голоса под отрисовку (ноты нельзя переиспользовать).
         // measureIndex = idx — нужен реестру лиг (noteId "m:v:i").
@@ -119,8 +143,15 @@ function drawSystem(VF, ctx, sys, measures, cfg, yTop, beats, beatValue,
             const stave = new VF.Stave(x, yTop + st.dy, staveW);
             if (isFirst) {
                 stave.addClef(st.clef);
-                if (cfg.keySig && keySig) stave.addKeySignature(keySig);
+                if (cfg.keySig && sysKey) stave.addKeySignature(sysKey, sysCancel || undefined);
                 if (withTime && timeSig) stave.addTimeSignature(timeSig);
+            } else if (midChange) {
+                // Клеф середины системы не рисуется, но тональность берёт
+                // вертикальные линии знаков из getClef() — задаём контекст
+                // клефа явно (без глифа), чтобы знаки баса не встали по
+                // скрипичному.
+                stave.clef = st.clef;
+                stave.addKeySignature(effKeys[idx], midCancel);
             }
             stave.setContext(ctx);
             stave.format();
@@ -215,9 +246,15 @@ export function renderPrintPages(score) {
     const instrument = score.instrument === 'drums' ? 'drums' : 'piano';
     const cfg = layoutConfig(instrument);
     const measures = score.measures || [];
-    const keySig = cfg.keySig ? (score.keySignature || 'C') : null;
+    // Действующая тональность КАЖДОГО такта (старт + смены `_key`) — единое
+    // разрешение из domain/keysig (та же логика, что у compiler/render).
+    const effKeys = cfg.keySig ? effectiveKeys(measures, score.keySignature || 'C') : null;
     const timeSig = score.timeSignature || (beats + '/' + beatValue);
     if (measures.length === 0) return 0;
+    // Смена тональности на такте i (для ширины и отрисовки в середине системы).
+    const changedAt = function (i) {
+        return effKeys && i > 0 && effKeys[i] !== effKeys[i - 1];
+    };
 
     // --- проход 1: минимальные ширины тактов ---
     const cm = [];
@@ -229,20 +266,35 @@ export function renderPrintPages(score) {
         cm.push(Math.max(48, measureMinWidth(VF, vs)));
     }
 
-    // первая страница + замер ширин «головы» стана
+    // первая страница + замер дополнительной ширины смен тональности в середине
+    // системы (учитывается в раскладке, чтобы такт со сменой не сжал ноты).
     const ctx0 = newPage(root);
-    const clefKeyW = headWidth(VF, ctx0, cfg, keySig, timeSig, false);
-    const timeExtra = headWidth(VF, ctx0, cfg, keySig, timeSig, true) - clefKeyW;
+    const keyLead = [];
+    for (let i = 0; i < measures.length; i++) {
+        keyLead.push(changedAt(i) ? midKeyWidth(VF, ctx0, effKeys[i], effKeys[i - 1]) : 0);
+    }
+    // Ведущая ширина смены в середине системы (0, если такт — первый в системе:
+    // там тональность уходит в «голову»).
+    const midLead = function (sys, k) {
+        return (k > sys.firstMeasure && changedAt(k)) ? keyLead[k] : 0;
+    };
+    // Ширина «головы» системы по её действующей тональности (+ размер на первой
+    // системе, + бекары-отмена, если система начинается со смены).
+    const headOfSystem = function (f) {
+        const sysKey = effKeys ? effKeys[f] : null;
+        const cancel = (effKeys && f > 0) ? cancelKeyFor(effKeys[f - 1], effKeys[f]) : null;
+        return headWidth(VF, ctx0, cfg, sysKey, timeSig, f === 0, cancel);
+    };
 
     // --- проход 2: разбиение на системы ---
     const W = printW();
     const systems = [];
     let i = 0;
     while (i < measures.length) {
-        const sys = { items: [], firstMeasure: i, L: clefKeyW + (i === 0 ? timeExtra : 0) };
+        const sys = { items: [], firstMeasure: i, L: headOfSystem(i) };
         let used = sys.L;
         while (i < measures.length) {
-            const add = cm[i] + MEASURE_PAD;
+            const add = cm[i] + MEASURE_PAD + midLead(sys, i);
             if (sys.items.length > 0 && used + add > W) break;
             sys.items.push(i);
             used += add;
@@ -255,14 +307,17 @@ export function renderPrintPages(score) {
     systems.forEach(function (sys, si) {
         const budget = W - sys.L;
         const sumCm = sys.items.reduce(function (a, k) { return a + cm[k]; }, 0);
-        const natural = sumCm + sys.items.length * MEASURE_PAD;
+        const leadSum = sys.items.reduce(function (a, k) { return a + midLead(sys, k); }, 0);
+        const natural = sumCm + sys.items.length * MEASURE_PAD + leadSum;
         const isLast = si === systems.length - 1;
         let delta = budget - natural;
         if (delta < 0) delta = 0;
         const justify = !(isLast && natural / budget < 0.5);
         sys.widths = {};
         sys.items.forEach(function (k) {
-            let cw = cm[k] + MEASURE_PAD;
+            // Смена тональности — ФИКСИРОВАННАЯ часть ширины такта; justify
+            // распределяет остаток по содержимому (cm), не по ведущей ширине.
+            let cw = cm[k] + MEASURE_PAD + midLead(sys, k);
             if (justify && sumCm > 0) cw += delta * (cm[k] / sumCm);
             sys.widths[k] = cw;
         });
@@ -311,7 +366,7 @@ export function renderPrintPages(score) {
         let y = PAGE.mtop + headOffset;
         for (let k = 0; k < n; k++) {
             drawSystem(VF, ctx, pageSystems[k], measures, cfg, y,
-                beats, beatValue, keySig, timeSig, sysGi, printObjs, printStaves);
+                beats, beatValue, effKeys, timeSig, sysGi, printObjs, printStaves);
             sysGi++;
             y += sysH + gap;
         }

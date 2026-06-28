@@ -10,6 +10,7 @@ import { buildVoice, beamGroups, buildTuplets, measureMinWidth } from './layout.
 import { drawTiesAndSlurs } from './ligatures.js';
 import { drawScreenDynamics } from './dynamics.js';
 import { drawSelectionHighlight, keepCursorInView, attachTapListener } from './geometry.js';
+import { effectiveKeys, cancelKeyFor } from '../domain/keysig.js';
 import { Playback } from '../playback/scheduler.js';
 
 function clearCanvas() {
@@ -74,22 +75,40 @@ export function render(score, forcedWidth) {
     renderer.resize(width, Math.max(1, container.clientHeight || 200));
     const ctx = renderer.getContext();
 
-    // Реальная ширина «головы» стана: левый отступ + ключ [+ тональность]
-    // [+ размер], через getNoteStartX временного стана.
-    function headStart(addClef, addTime) {
+    // Действующая тональность КАЖДОГО такта (старт партитуры + смены `_key`) —
+    // единое разрешение из domain/keysig (та же логика, что у compiler/print).
+    const keys = effectiveKeys(measures, score.keySignature || 'C');
+    // Тональность для отмены (courtesy naturals) на такте mi: предыдущая, если
+    // сменилась. null для ударных/первого такта/без смены (правило — в keysig).
+    function cancelOf(mi) {
+        if (isDrums || mi <= 0) return null;
+        return cancelKeyFor(keys[mi - 1], keys[mi]);
+    }
+
+    // Реальная ширина «головы» стана по ФАКТИЧЕСКИМ начальным модификаторам
+    // (ключ [+ тональность с бекарами-отменой] [+ размер]), через getNoteStartX
+    // временного стана. beginWidth измеряет ровно то, что будет нарисовано —
+    // поэтому смена тональности в середине строки получает корректную ширину и
+    // не сжимает ноты.
+    function beginWidth(addClef, addTime, keyName, cancelName) {
         const s = new VF.Stave(0, 0, 500);
         if (addClef) s.addClef(clefList[0]);
-        if (addClef && !isDrums) s.addKeySignature(score.keySignature || 'C');
+        if (!isDrums && keyName) s.addKeySignature(keyName, cancelName || undefined);
         if (addTime) s.addTimeSignature(score.timeSignature);
         s.setContext(ctx);
         s.format();
         return s.getNoteStartX();
     }
-    const headFirst = headStart(true, true);   // такт 0: ключ+тональн.+размер
-    const headRowStart = headStart(true, false); // начало строки: ключ+тональн.
-    const headInner = headStart(false, false);   // середина строки: без ключа
-    function headOf(rowStart, isFirst) {
-        return isFirst ? headFirst : (rowStart ? headRowStart : headInner);
+    const headInner = beginWidth(false, false, null, null); // середина строки без модиф.
+    // Ведущая ширина такта: на старте строки — ключ+тональность[+размер на
+    // такте 0]; в середине строки при смене тональности — тональность с
+    // бекарами; иначе — голый отступ.
+    function leadOf(col, mi) {
+        const keyName = isDrums ? null : keys[mi];
+        const cancel = cancelOf(mi);
+        if (col === 0) return beginWidth(true, mi === 0, keyName, cancel);
+        if (cancel) return beginWidth(false, false, keyName, cancel);
+        return headInner;
     }
 
     // проход 1: минимальная ширина содержимого каждого такта
@@ -109,7 +128,7 @@ export function render(score, forcedWidth) {
         const items = [];
         let sumHead = 0, sumE = 0;
         while (i < measures.length) {
-            const h = headOf(items.length === 0, i === 0);
+            const h = leadOf(items.length === 0 ? 0 : 1, i);
             const e = cm[i] + INNER_PAD;
             if (items.length > 0 && sumHead + sumE + h + e > usableW) break;
             items.push(i); sumHead += h; sumE += e; i++;
@@ -131,7 +150,7 @@ export function render(score, forcedWidth) {
         const es = items.map(function (mi, col) {
             const e = cm[mi] + INNER_PAD;
             sumE += e;
-            sumHead += headOf(col === 0, mi === 0);
+            sumHead += leadOf(col, mi);
             return e;
         });
         const flexible = Math.max(0, usableW - sumHead);
@@ -150,7 +169,7 @@ export function render(score, forcedWidth) {
             const isFirst = i === 0;
             const contentW = es[col] * ratio +
                 (sumE > 0 ? extra * (es[col] / sumE) : 0);
-            const w = headOf(rowStart, isFirst) + contentW;
+            const w = leadOf(col, i) + contentW;
             geom[i] = { row: r, x: x, w: w };
 
             try {
@@ -167,10 +186,28 @@ export function render(score, forcedWidth) {
                 } else {
                     const treble = new VF.Stave(x, yTop, w);
                     const bass = new VF.Stave(x, yTop + bassDY, w);
-                    if (rowStart) { treble.addClef('treble'); bass.addClef('bass'); }
+                    const keyName = keys[i];
+                    const cancel = cancelOf(i);
+                    if (rowStart) {
+                        treble.addClef('treble'); bass.addClef('bass');
+                        // Тональность повторяется в начале каждой системы (с
+                        // бекарами-отменой, если на этом такте смена).
+                        treble.addKeySignature(keyName, cancel || undefined);
+                        bass.addKeySignature(keyName, cancel || undefined);
+                    } else if (cancel) {
+                        // Смена тональности в середине строки — сразу после
+                        // барлайна: сначала бекары прежних знаков, затем новые
+                        // (правило гравировки реализует VexFlow по cancelKey).
+                        // Клеф середины строки не рисуется, но тональность берёт
+                        // вертикальные линии знаков из getClef() — задаём контекст
+                        // клефа явно (без глифа), иначе знаки баса встанут по
+                        // скрипичному.
+                        treble.clef = 'treble';
+                        bass.clef = 'bass';
+                        treble.addKeySignature(keyName, cancel);
+                        bass.addKeySignature(keyName, cancel);
+                    }
                     if (isFirst) {
-                        treble.addKeySignature(score.keySignature || 'C');
-                        bass.addKeySignature(score.keySignature || 'C');
                         treble.addTimeSignature(score.timeSignature);
                         bass.addTimeSignature(score.timeSignature);
                     }
