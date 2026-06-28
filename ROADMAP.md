@@ -3,151 +3,444 @@
 > Single source of truth for the project's state. Completed items are verified
 > against the actual codebase, not aspirations.
 >
-> Last reviewed: 2026-06-27 · Flutter + Material 3 · VexFlow 4.2.2 in WebView.
-
-## Vision
-
-A mobile-first music notation editor that musicians can comfortably use to
-**create, edit, play back, and share** scores directly on a phone — with
-print-grade output (clean A4 PDF, no clipped bars). Primary focus: keyboard
-(grand staff) and drum notation. Fully offline, no backend.
+> Last reviewed: **2026-06-29** · Flutter 3.44.3 · Material 3 · VexFlow 4.2.2 · ES Modules.
 
 ---
 
-## Architecture (orientation)
+# Vision
 
-- **Flutter shell** — UI, state, file storage, transport controls.
-- **VexFlow engine** in `assets/www/index.html`, served over a local HTTP
-  server (`InAppLocalhostServer`) inside `flutter_inappwebview` — offline.
-- **Bridge** — score serialized to base64 JSON → `ScoreFlow.renderB64`; taps and
-  playback events flow back via `callHandler`.
-- **Storage** — one JSON file per score under app documents (`ScoreRepository`).
-- **Playback** — Web Audio scheduler (look-ahead), sampled piano/drums with
-  synth fallback.
+A mobile-first professional music notation editor that musicians can comfortably
+**create, edit, play back, print, and share** scores directly on a phone.
 
----
+Primary focus:
 
-## Completed
+* Piano (grand staff)
+* Drum notation
 
-### Core
-- [x] Offline-first local storage (per-score JSON via `path_provider`)
-- [x] Flutter + Material 3 (`useMaterial3`, dark seed theme)
-- [x] VexFlow WebView engine (local HTTP server, offline asset resolution)
-- [x] PDF export (system print → "Save as PDF")
-- [x] A4 pagination (system/page layout with justification)
-- [x] Modular ES-module engine (`assets/www/js`: utils/domain/audio/playback/render/bridge; `index.html` is a thin entry point)
-- [x] Modern Android build (AGP 8.11.1 / Gradle 8.14 / Kotlin 2.2.20; no `--android-skip-build-dependency-validation`)
+Secondary goals:
 
-### Notation
-- [x] Piano notation (grand staff: treble + bass, brace)
-- [x] Drum notation (percussion clef, x-heads, articulations by notehead)
-- [x] Dotted notes (1 dot in UI; model supports N dots)
-- [x] Dotted rests (canonical, beat-aligned auto-fill)
-- [x] 32nd notes
-- [x] 64th notes
-- [x] Chord mode (explicit stack toggle)
-- [x] Multi-key notes (chords, drum stacks)
-- [x] **Tie** (duration ligature — model, rendering, **playback merge**, PDF)
-- [x] **Slur** (phrasing ligature — model, rendering, PDF) — _playback unaffected by design (stage 1)_
-- [x] **Tuplets** (universal `actual:normal` — triplets, quintuplets, sextuplets, septuplets, custom; model, rendering, playback timing, reflow-atomic, PDF)
-- [x] Auto measure completion (reflow + canonical rest fill)
-- [x] Professional beaming (beat-group beams, compound/irregular meters)
-- [x] Partial ligature arcs across row/system breaks
-- [x] Key signature & time signature (incl. custom meters)
-- [x] **Accidentals** (♯ ♭ ♮ 𝄪 𝄫 — dedicated `Accidental`/`Pitch` model, per-notehead; editor tool, rendering, PDF; **playback pitch resolved once** = key signature + accidental + measure rules: carry-to-end-of-measure, per step+octave, natural cancels, auto-reset next measure; extensible to microtones)
-- [x] **Dynamics** (ppp pp p mp mf f ff fff — dedicated `DynamicMark`/`Dynamic` model, notation object on a rhythmic position **not** a note property; editor tool (piano + drums), rendering below staff via SMuFL glyphs, PDF; **playback loudness resolved once** in the compiler = active dynamic → per-event velocity, persists until the next mark, per-voice, reflow-preserving by absolute beat; architecture extensible to sfz/fp/rfz and hairpins without redesign)
-
-### Playback
-- [x] Audio Engine (Web Audio, look-ahead scheduler, "two clocks")
-- [x] Sampled Piano (Salamander samples present in repo; synth fallback)
-- [x] Drum samples (kit MP3s present in repo; synth fallback)
-- [x] Metronome (accent on downbeat)
-- [x] Follow Playback (vertical auto-scroll to active system)
-- [x] Note-synced playhead + active-note highlight
-- [x] Sustain (damper) pedal for piano
-- [x] Tempo control (BPM)
-
-### Editor
-- [x] Undo / Redo (snapshot-based history)
-- [x] Smart insert (fills rests / inserts after cursor)
-- [x] Smart delete (note → rest in place, ligatures cleared)
-- [x] Cursor navigation (arrows + tap-to-select on score)
-- [x] Chord input mode
-- [x] Slur input via range selection (anchor → cursor)
-- [x] Score library (create, list, delete, rename)
+* Professional engraving
+* Accurate playback
+* Full offline workflow
+* MusicXML interoperability
 
 ---
 
-## In Progress
+# Architecture
 
-_Nothing in active development right now._
-
----
-
-## Next Priorities
-
-### High Priority
-- [ ] Copy / Paste measures
-- [ ] Multi-selection
-- [ ] Crescendo / Diminuendo (hairpins) — _reuses the dynamics layer: positional anchors + per-event velocity ramp in the compiler_
-- [ ] Expressive dynamics (sfz, fp, rfz) — _new `DynamicMark` values; model/compiler/render already extensible_
-
-### Medium Priority
-- [ ] Slur playback (legato shaping) — _rendering/model already done_
-- [ ] In-app Page View (A4) toggle — _A4 layout currently lives only in PDF export_
-- [ ] MusicXML Import
-- [ ] MIDI Import
-- [ ] Articulations (staccato, accent, tenuto, …)
-- [ ] Tempo changes (mid-score)
-
-### Low Priority
-- [ ] Additional instruments
-- [ ] Cloud sync
-- [ ] Collaboration
+* **Flutter shell** — UI, editor, storage, transport controls.
+* **Modular VexFlow Engine** (`assets/www/js/`) running inside WebView.
+* **Bridge** — Flutter ↔ JavaScript communication via Base64 JSON.
+* **Storage** — Offline-first JSON files (`ScoreRepository`).
+* **Playback** — Web Audio look-ahead scheduler with sampled piano/drums and synth fallback.
+* **Rendering** — Shared engraving pipeline for screen and PDF.
 
 ---
 
-## Technical Debt
+# Completed
 
-- [ ] WebView rendering performance (full SVG rebuild on every edit)
-- [ ] Ligature rendering in compressed measures (`sx<1`): tail extents are
-      approximate; ties/slurs are drawn inside the measure's scale transform
-- [ ] Playback profiling (scheduler under dense scores)
-- [ ] Large score optimization (layout passes scale with measure count)
-- [ ] Broader JS-side test harness (node ESM tests exist for the pitch resolver — `test/js/accidental_resolver.test.mjs` — and the dynamics/velocity resolver — `test/js/dynamics_resolver.test.mjs`; wider engine coverage still TBD, not wired into `flutter test`)
+## Core
 
----
+* [x] Offline-first local storage
+* [x] Flutter + Material 3
+* [x] VexFlow WebView engine
+* [x] Modular ES-module architecture (18 JS modules)
+* [x] Local HTTP asset server
+* [x] PDF export
+* [x] Professional A4 pagination
+* [x] Android build modernization
 
-## Future Vision
-
-_Ideas without commitment._
-
-- MusicXML export
-- MIDI export
-- Plugin system
-- AI-assisted transcription
-- Desktop version
-- Tablet-optimized layout
+  * AGP 8.11.1
+  * Gradle 8.14
+  * Kotlin 2.2.20
+  * Flutter 3.44.3 compatible
+* [x] Release build pipeline
 
 ---
 
-## Notes & Discrepancies (code vs. the requested roadmap)
+## Notation
 
-Findings from scanning the repo, so this file stays the source of truth:
+### General
 
-1. **Slur is already implemented** (model + rendering + PDF), not a future item.
-   It was requested under *Next → Medium*; moved to **Completed**. Only its
-   **playback** is intentionally deferred (kept as a Medium item).
-2. **Features present in code but absent from the requested list** (added to
-   Completed): key/time signature selection (incl. custom meters), tempo,
-   sustain pedal, score library (CRUD + rename), tap-to-select, synth fallback,
-   partial cross-system ligature arcs.
-3. **"Dual-View" (Line/Page) from the README is not fully realized in-app.** The
-   editor renders **Line View only**; the A4 (Page) layout exists **only in the
-   PDF export path**, not as an interactive in-editor toggle. Tracked under
-   *Next → Medium*.
-4. **Easter egg** ("Sasha's kidney") described in `.clauderules` / `README` is
-   **not implemented** in code (no references outside docs).
-5. **Samples in repo:** the README states binary samples are not committed, but
-   `assets/www/piano/*.mp3` and `assets/www/drums/*.mp3` are **present** in the
-   working tree. (Doc nuance, not a functional gap.)
+* [x] Grand staff (treble + bass)
+* [x] Percussion staff
+* [x] Chord mode
+* [x] Multi-note chords
+* [x] Canonical measure completion
+* [x] Professional beaming
+* [x] Cross-system ligatures
+
+### Rhythm
+
+* [x] Dotted notes
+* [x] Dotted rests
+* [x] 32nd notes
+* [x] 64th notes
+* [x] Universal tuplets
+
+  * Triplets
+  * Quintuplets
+  * Sextuplets
+  * Septuplets
+  * Custom ratios
+
+### Musical Symbols
+
+* [x] Key signatures
+* [x] Time signatures
+* [x] Accidentals
+
+  * Sharp
+  * Flat
+  * Natural
+  * Double Sharp
+  * Double Flat
+  * Measure rules
+  * Playback resolution
+* [x] Ties
+
+  * Rendering
+  * Playback merge
+  * PDF
+* [x] Slurs
+
+  * Rendering
+  * PDF
+* [x] Dynamics
+
+  * ppp
+  * pp
+  * p
+  * mp
+  * mf
+  * f
+  * ff
+  * fff
+  * SMuFL rendering
+  * PDF
+  * Compiler-integrated playback
+  * Per-voice timelines
+  * Reflow preservation
+  * Collision avoidance
+
+---
+
+## Playback
+
+* [x] Web Audio Engine
+* [x] Look-ahead scheduler
+* [x] Sampled piano
+* [x] Sampled drums
+* [x] Synth fallback
+* [x] Metronome
+* [x] Sustain pedal
+* [x] Tempo control
+* [x] Follow Playback
+* [x] Playhead
+* [x] Active note highlighting
+* [x] Compiler-resolved accidentals
+* [x] Compiler-resolved dynamics
+* [x] Shared perceptual velocity curve
+* [x] Unified velocity → gain pipeline
+
+---
+
+## Rendering
+
+* [x] Professional screen rendering
+* [x] Professional PDF rendering
+* [x] Shared engraving algorithms
+* [x] Dynamics collision avoidance
+* [x] Shared screen/PDF dynamics placement
+
+---
+
+## Editor
+
+* [x] Undo / Redo
+* [x] Smart insert
+* [x] Smart delete
+* [x] Cursor navigation
+* [x] Tap selection
+* [x] Chord input
+* [x] Slur creation
+* [x] Dynamics editor
+* [x] Score library
+
+  * Create
+  * Rename
+  * Delete
+
+---
+
+## Quality
+
+* [x] Flutter analyze clean
+* [x] Dart test suite
+* [x] JavaScript engine tests
+* [x] Android Debug build
+* [x] Android Release build
+* [x] GitHub Release workflow
+
+---
+
+# In Progress
+
+*Nothing in active development.*
+
+---
+
+# Next Priorities
+
+## 🎼 Musical Core (Highest Priority)
+
+### Key Signatures
+
+* [ ] Mid-score key signature changes
+* [ ] Automatic courtesy naturals
+* [ ] Playback updates after key change
+
+---
+
+### Time Signatures
+
+* [ ] Mid-score time signature changes
+* [ ] Automatic reflow after meter changes
+
+---
+
+### Barlines
+
+* [ ] Single
+* [ ] Double
+* [ ] Final
+* [ ] Repeat Begin (`|:`)
+* [ ] Repeat End (`:|`)
+* [ ] Repeat Both (`:|:`)
+* [ ] Invisible
+* [ ] Dashed
+
+---
+
+### Repeats
+
+* [ ] First ending
+* [ ] Second ending
+* [ ] D.C. al Fine
+* [ ] D.S. al Coda
+* [ ] Segno
+* [ ] Coda
+* [ ] Fine
+* [ ] Playback support
+
+---
+
+### Tempo
+
+* [ ] Tempo markings
+* [ ] Mid-score tempo changes
+* [ ] Accelerando
+* [ ] Ritardando
+* [ ] A tempo
+* [ ] Playback support
+
+---
+
+### Articulations
+
+* [ ] Staccato
+* [ ] Accent
+* [ ] Tenuto
+* [ ] Marcato
+* [ ] Staccatissimo
+* [ ] Fermata
+* [ ] Playback support
+
+---
+
+### Hairpins
+
+* [ ] Crescendo
+* [ ] Diminuendo
+* [ ] Playback interpolation
+
+---
+
+### Expressive Dynamics
+
+* [ ] sf
+* [ ] sfz
+* [ ] fp
+* [ ] rfz
+* [ ] subito p
+* [ ] subito f
+
+---
+
+### Piano
+
+* [ ] Pedal notation (Ped. / *)
+* [ ] Ottava (8va / 8vb / 15ma / 15mb)
+
+---
+
+### Ornaments
+
+* [ ] Trill
+* [ ] Mordent
+* [ ] Turn
+* [ ] Inverted Turn
+
+---
+
+### Grace Notes
+
+* [ ] Acciaccatura
+* [ ] Appoggiatura
+
+---
+
+### Other Musical Symbols
+
+* [ ] Tremolo
+* [ ] Arpeggio
+* [ ] Multi-measure rests
+* [ ] Chord symbols
+* [ ] Lyrics
+
+---
+
+## ✏️ Editor
+
+* [ ] Multi-selection
+* [ ] Copy / Paste
+* [ ] Drag selection
+* [ ] Batch editing
+
+---
+
+## 🎨 Engraving
+
+* [ ] Automatic articulation collision avoidance
+* [ ] Hairpin collision avoidance
+* [ ] Better horizontal spacing
+* [ ] Better vertical spacing
+* [ ] System justification improvements
+* [ ] Page justification improvements
+
+---
+
+## 📤 Export
+
+* [ ] MusicXML Export
+* [ ] MIDI Export
+* [ ] PNG Export
+* [ ] SVG Export
+
+---
+
+## 📥 Import
+
+* [ ] MusicXML Import
+* [ ] MIDI Import
+
+---
+
+## 🌍 Platform
+
+* [ ] Additional instruments
+* [ ] Cloud synchronization
+* [ ] Collaboration
+* [ ] Desktop edition
+* [ ] Tablet-optimized layout
+
+---
+
+# Technical Debt
+
+* [ ] Incremental SVG rendering
+* [ ] Large-score rendering optimization
+* [ ] Scheduler performance profiling
+* [ ] Shared screen/PDF engraving utilities
+* [ ] Snapshot rendering tests
+* [ ] Broader JS engine test coverage
+* [ ] Benchmark suite for rendering and playback
+
+---
+
+# Future Vision
+
+Ideas without commitment.
+
+* Plugin API
+* AI-assisted transcription
+* AI-assisted accompaniment
+* Guitar tablature
+* Handwriting recognition
+* Real-time collaboration
+* DAW interoperability
+* VST playback
+* Mobile MIDI recording
+
+---
+
+# Milestones
+
+## v0.4.x
+
+Professional notation foundation.
+
+* Modular rendering engine
+* Professional tuplets
+* Professional accidentals
+* Professional dynamics
+* Modern Android toolchain
+* Stable PDF export
+
+---
+
+## v0.5.x
+
+Complete musical notation core.
+
+* Key changes
+* Meter changes
+* Barlines
+* Tempo system
+* Articulations
+* Hairpins
+
+---
+
+## v0.6.x
+
+Professional playback.
+
+* Expressive playback
+* Repeats
+* Tempo automation
+* Pedal notation
+* Ornaments
+
+---
+
+## v0.7.x
+
+Interoperability.
+
+* MusicXML Export
+* MIDI Export
+* MusicXML Import
+* MIDI Import
+
+---
+
+## v1.0.0
+
+First stable release.
+
+* Complete musical notation engine
+* Professional engraving
+* Stable playback
+* Import / Export ecosystem
+* Production-ready mobile score editor
