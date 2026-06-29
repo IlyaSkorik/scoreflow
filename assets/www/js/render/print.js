@@ -16,6 +16,8 @@ import { buildVoice, beamGroups, buildTuplets, measureMinWidth } from './layout.
 import { voiceListOf, nextRealNote, sameKeys } from '../domain/notes.js';
 import { effectiveKeys, cancelKeyFor } from '../domain/keysig.js';
 import { effectiveTimeSignatures } from '../domain/timesig.js';
+import { effectiveBarlines } from '../domain/barlines.js';
+import { setupBarline, drawCustomBarline } from './barlines.js';
 import { drawDynamic } from './dynamics.js';
 import { dynamicsBaseline } from './dynamics_layout.js';
 import { noteOnsets, indexAtBeat } from '../domain/dynamics.js';
@@ -119,7 +121,7 @@ function drawTitle(ctx, title, composer) {
 // номер системы, [registry] — реестр noteId -> {sn, ctx, sys} для
 // последующего прохода лиг (Tie/Slur), общий на всю печать.
 function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
-                    effKeys, sysIndex, registry, staveReg) {
+                    effKeys, bars, sysIndex, registry, staveReg) {
     let x = PAGE.mx;
     // Тональность головы системы (+ бекары-отмена, если система начинается со
     // смены) — действующая тональность первого такта системы.
@@ -165,6 +167,7 @@ function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
                 if (midChange) stave.addKeySignature(effKeys[idx], midCancel);
                 if (midTimeChange) stave.addTimeSignature(tsStr[idx]);
             }
+            setupBarline(VF, stave, bars[idx]); // правая граница (до format/draw)
             stave.setContext(ctx);
             stave.format();
             return stave;
@@ -196,6 +199,9 @@ function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
         f.format(voices, contentW);
 
         staves.forEach(function (s) { s.draw(); });
+        // Кастартные черты (dashed/dotted/tick/short) — после draw, общим с
+        // экраном кодом (render/barlines). Нативные уже нарисовал VexFlow.
+        staves.forEach(function (s) { drawCustomBarline(VF, ctx, s, bars[idx]); });
         voices.forEach(function (v, si) {
             // Балки создаём ДО отрисовки нот: тогда у забимованных нот
             // не рисуются одиночные флажки (хвосты).
@@ -263,6 +269,9 @@ export function renderPrintPages(score) {
     // смены), как на экране; в начале систем размер не повторяется.
     const effTs = effectiveTimeSignatures(measures, score.timeSignature || '4/4');
     const tsStr = effTs.map(function (t) { return t.beats + '/' + t.beatValue; });
+    // Тип тактовой черты (правой границы) КАЖДОГО такта — единое разрешение из
+    // domain/barlines (та же логика, что на экране).
+    const bars = effectiveBarlines(measures);
     if (measures.length === 0) return 0;
     // Смена тональности / размера на такте i>0 (для ширины и отрисовки в
     // середине системы). Размер на такте 0 — голова первой системы.
@@ -391,7 +400,7 @@ export function renderPrintPages(score) {
         let y = PAGE.mtop + headOffset;
         for (let k = 0; k < n; k++) {
             drawSystem(VF, ctx, pageSystems[k], measures, cfg, y,
-                effTs, tsStr, effKeys, sysGi, printObjs, printStaves);
+                effTs, tsStr, effKeys, bars, sysGi, printObjs, printStaves);
             sysGi++;
             y += sysH + gap;
         }

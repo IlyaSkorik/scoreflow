@@ -12,6 +12,8 @@ import { drawScreenDynamics } from './dynamics.js';
 import { drawSelectionHighlight, keepCursorInView, attachTapListener } from './geometry.js';
 import { effectiveKeys, cancelKeyFor } from '../domain/keysig.js';
 import { effectiveTimeSignatures } from '../domain/timesig.js';
+import { effectiveBarlines } from '../domain/barlines.js';
+import { setupBarline, drawCustomBarline } from './barlines.js';
 import { Playback } from '../playback/scheduler.js';
 
 function clearCanvas() {
@@ -93,6 +95,12 @@ export function render(score, forcedWidth) {
     function timeChangedAt(mi) {
         return mi === 0 || (mi > 0 && tsStr[mi] !== tsStr[mi - 1]);
     }
+
+    // Тип тактовой черты (правой границы) КАЖДОГО такта — единое разрешение из
+    // domain/barlines. Нативные типы ставятся на стан до отрисовки, кастартные
+    // (dashed/dotted/tick/short) дорисовываются после — общим со страничной
+    // печатью кодом (render/barlines), поэтому экран и PDF совпадают.
+    const bars = effectiveBarlines(measures);
 
     // Реальная ширина «головы» стана по ФАКТИЧЕСКИМ начальным модификаторам
     // (ключ [+ тональность с бекарами-отменой] [+ размер]), через getNoteStartX
@@ -190,7 +198,9 @@ export function render(score, forcedWidth) {
                     // Размер — только на такте смены (вкл. такт 0), не на каждой
                     // системе.
                     if (timeChangedAt(i)) stave.addTimeSignature(tsStr[i]);
+                    setupBarline(VF, stave, bars[i]); // правая граница (до draw)
                     stave.setContext(ctx).draw();
+                    drawCustomBarline(VF, ctx, stave, bars[i]); // кастомная (после)
 
                     const cIdx = (cursor.measure === i && cursor.voice === 'perc')
                         ? cursor.index : -1;
@@ -229,8 +239,14 @@ export function render(score, forcedWidth) {
                         treble.addTimeSignature(tsStr[i]);
                         bass.addTimeSignature(tsStr[i]);
                     }
+                    // Тактовая черта на ОБОИХ станах grand staff (как одиночная
+                    // линия сейчас) — нативный тип до draw, кастартная после.
+                    setupBarline(VF, treble, bars[i]);
+                    setupBarline(VF, bass, bars[i]);
                     treble.setContext(ctx).draw();
                     bass.setContext(ctx).draw();
+                    drawCustomBarline(VF, ctx, treble, bars[i]);
+                    drawCustomBarline(VF, ctx, bass, bars[i]);
 
                     const tIdx = (cursor.measure === i && cursor.voice === 'treble')
                         ? cursor.index : -1;
