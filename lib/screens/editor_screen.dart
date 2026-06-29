@@ -32,6 +32,21 @@ const String _kInheritTime = '__inherit_ts__';
 /// Служебное значение пикера размера «Другой…» (ввод произвольного n/d).
 const String _kCustomTime = '__custom_ts__';
 
+/// Подписи типов тактовой черты для пикера в листе «Ещё». Порядок = порядок
+/// показа (обычная -> двойная/финальная -> штриховая/пунктирная -> засечка/
+/// короткая -> невидимая). Расширяется добавлением значений в [BarlineType]
+/// (напр. реприза) без правки логики.
+const Map<BarlineType, String> _barlineLabels = {
+  BarlineType.normal: 'Обычная',
+  BarlineType.doubleBar: 'Двойная',
+  BarlineType.finalBar: 'Финальная',
+  BarlineType.dashed: 'Штриховая',
+  BarlineType.dotted: 'Пунктирная',
+  BarlineType.tick: 'Засечка',
+  BarlineType.short: 'Короткая',
+  BarlineType.invisible: 'Невидимая',
+};
+
 /// Редактор партитуры: WebView-рендер (VexFlow) + панель ввода нот + плеер.
 class EditorScreen extends StatefulWidget {
   final String scoreId;
@@ -214,6 +229,7 @@ class _EditorScreenState extends State<EditorScreen> {
     // reflow не «сдвигал» и не терял смены.
     final keysByIndex = s.measures.map((m) => m.keySignature).toList();
     final tsByIndex = s.measures.map((m) => m.timeSignature).toList();
+    final barByIndex = s.measures.map((m) => m.barline).toList();
 
     // ДЕЙСТВУЮЩИЙ размер такта по индексу — ЕДИНЫЙ источник ёмкости. Смены
     // размера позиционны (по индексу), поэтому одна функция описывает и старую,
@@ -254,9 +270,11 @@ class _EditorScreenState extends State<EditorScreen> {
           for (final v in s.instrument.voiceIds)
             v: i < bins[v]!.length ? bins[v]![i] : <MusicNote>[],
         },
-        // Смены тональности/размера остаются на своём такте (позиционный якорь).
+        // Смены тональности/размера и тактовая черта остаются на своём такте
+        // (позиционный якорь по индексу — переживают reflow).
         keySignature: i < keysByIndex.length ? keysByIndex[i] : null,
         timeSignature: i < tsByIndex.length ? tsByIndex[i] : null,
+        barline: i < barByIndex.length ? barByIndex[i] : null,
       ));
     }
 
@@ -998,6 +1016,24 @@ class _EditorScreenState extends State<EditorScreen> {
     });
   }
 
+  /// Инструмент «Тактовая черта» — установка/смена/снятие черты на ПРАВОЙ границе
+  /// текущего такта (профессиональный выбор типа черты по месту, как в MuseScore/
+  /// Dorico/Finale). [type]==null или [BarlineType.normal] — вернуть обычную
+  /// одиночную черту (снять override, храним null). Иначе поставить выбранный тип.
+  ///
+  /// Черта — FIRST-CLASS нотационный объект на границе такта (НЕ свойство
+  /// рендера): переживает reflow позиционно (по номеру такта), как смены
+  /// тональности/размера (см. [_normalize]). Playback не затрагивается (нотация-
+  /// only). Идёт через обычный пайплайн (_commit -> normalize -> render ->
+  /// persist -> Undo/Redo). Доступно обоим инструментам (черта есть и у ударных).
+  void _setMeasureBarline(BarlineType? type) {
+    final m = _cursor.measure;
+    _commit(() {
+      _score!.measures[m].barline =
+          (type == null || type.isDefault) ? null : type;
+    });
+  }
+
   /// Нижний лист «Ещё» — редкие действия вне рабочей зоны: точный темп,
   /// sustain (фортепиано), параметры партитуры (тональность/размер),
   /// добавление такта, переименование, экспорт PDF.
@@ -1154,6 +1190,33 @@ class _EditorScreenState extends State<EditorScreen> {
                         } else {
                           _setMeasureTimeSignature(v);
                         }
+                        setSheet(() {});
+                      },
+                    ),
+                  );
+                }),
+                // Тактовая черта — контекстно к ТАКТУ под курсором: тип ПРАВОЙ
+                // границы (обычная/двойная/финальная/штриховая/пунктирная/
+                // засечка/короткая/невидимая). Нотационный объект на границе
+                // такта; смена немедленно перерендерит экран/PDF, попадёт в
+                // Undo/Redo и автосейв. Доступно обоим инструментам.
+                Builder(builder: (ctx) {
+                  final m = _cursor.measure;
+                  final cur = score.measures[m].barline ?? BarlineType.normal;
+                  return ListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                    leading: const Icon(Icons.view_week_outlined),
+                    title: Text('Тактовая черта (такт ${m + 1})'),
+                    trailing: DropdownButton<BarlineType>(
+                      value: cur,
+                      items: [
+                        for (final t in BarlineType.values)
+                          DropdownMenuItem(
+                              value: t, child: Text(_barlineLabels[t]!)),
+                      ],
+                      onChanged: (v) {
+                        if (v == null) return;
+                        _setMeasureBarline(v);
                         setSheet(() {});
                       },
                     ),
