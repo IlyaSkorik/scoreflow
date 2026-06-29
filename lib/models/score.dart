@@ -183,6 +183,60 @@ class Dynamic {
   int get hashCode => Object.hash(mark, voice, beat);
 }
 
+/// Тип тактовой черты (barline) — ОТДЕЛЬНАЯ модель и FIRST-CLASS нотационный
+/// объект, как в MuseScore/Dorico/Finale. НЕ свойство рендера: черта привязана к
+/// ГРАНИЦЕ такта (его ПРАВОМУ краю — end barline) и переживает reflow как
+/// позиционный якорь (по номеру такта), точно как [Measure.keySignature]/
+/// [Measure.timeSignature].
+///
+/// Каждое значение само знает (а) свой [id] для JSON и (б) — через движок
+/// (domain/barlines.js) — проекцию на НАТИВНЫЙ тип VexFlow (normal/double/final/
+/// invisible) ЛИБО кастомную профессиональную гравировку (dashed/dotted/tick/
+/// short). Поэтому расширение до Repeat Start/End/Both — это ДОБАВЛЕНИЕ значений
+/// (нативные типы VexFlow REPEAT_*), без переделки модели, рендера, сериализации
+/// или редактора. Вольты/D.C./D.S./Fine/Coda лягут отдельными объектами с тем же
+/// позиционным якорем.
+///
+/// [normal] — обычная одиночная черта (ПО УМОЛЧАНИЮ): на такте хранится как null
+/// и НЕ сериализуется (как «нет смены» у `_key`/`_ts`); движок рисует штатную
+/// одиночную линию VexFlow. [invisible] — ЯВНЫЙ тип: занимает место в раскладке,
+/// но линия не рисуется (VexFlow Barline NONE).
+enum BarlineType {
+  normal,
+  doubleBar,
+  finalBar,
+  dashed,
+  dotted,
+  tick,
+  short,
+  invisible;
+
+  /// JSON-идентификатор (значение зарезервированного ключа `_bar`). Совпадает с
+  /// именем константы, кроме double/final: их имена в Dart зарезервированы,
+  /// поэтому константы названы doubleBar/finalBar, а id остаются 'double'/'final'
+  /// (стабильный, читаемый формат — как имена тональностей/размеров).
+  String get id => switch (this) {
+        BarlineType.doubleBar => 'double',
+        BarlineType.finalBar => 'final',
+        _ => name,
+      };
+
+  /// Черта по умолчанию (одиночная). Хранится на такте как null и не пишется в
+  /// JSON — «не сериализовать, если не изменилось» (как `_key`/`_ts`/лиги).
+  bool get isDefault => this == BarlineType.normal;
+
+  static BarlineType fromId(String? id) => switch (id) {
+        'double' => BarlineType.doubleBar,
+        'final' => BarlineType.finalBar,
+        'dashed' => BarlineType.dashed,
+        'dotted' => BarlineType.dotted,
+        'tick' => BarlineType.tick,
+        'short' => BarlineType.short,
+        'invisible' => BarlineType.invisible,
+        _ => BarlineType.normal,
+      };
+}
+
 /// Знак альтерации головки ноты. ОТДЕЛЬНАЯ модель (не bool) — как в MuseScore/
 /// Dorico/Finale. Архитектура расширяема до микротонов/четвертьтонов простым
 /// добавлением значений: каждое значение само знает свой сдвиг в полутонах и
@@ -522,14 +576,26 @@ class Measure {
   /// VexFlow "3/4"; старые файлы без него грузятся.
   TimeSignature? timeSignature;
 
+  /// Тактовая черта на ПРАВОЙ границе этого такта (end barline) или null —
+  /// обычная одиночная черта ([BarlineType.normal] по умолчанию). ПОЗИЦИОННЫЙ
+  /// якорь — как [keySignature]/[timeSignature]: привязан к НОМЕРУ такта, не к
+  /// нотам; при reflow остаётся на своём такте (см. editor `_normalize`). Тип
+  /// черты разрешается в ОДНОМ месте (движок domain/barlines для рендера/печати);
+  /// playback на черту не реагирует (нотация-only). Хранится под зарезервированным
+  /// ключом `_bar` (как `_key`/`_ts`/`_dyn`) — строкой-id ('double','final',…);
+  /// старые файлы без него грузятся, нормальная черта не пишется (лаконичный JSON).
+  BarlineType? barline;
+
   static const String _dynKey = '_dyn';
   static const String _keyKey = '_key';
   static const String _tsKey = '_ts';
+  static const String _barKey = '_bar';
 
   Measure(this.voices,
       {Map<String, List<Dynamic>>? dynamics,
       this.keySignature,
-      this.timeSignature})
+      this.timeSignature,
+      this.barline})
       : dynamics = dynamics ?? {};
 
   factory Measure.empty(InstrumentType instrument) => Measure({
@@ -556,6 +622,7 @@ class Measure {
         timeSignature: timeSignature == null
             ? null
             : TimeSignature(timeSignature!.beats, timeSignature!.beatValue),
+        barline: barline,
       );
 
   /// JSON оттенков по голосам (только непустые списки) — общий для persistence
@@ -575,14 +642,16 @@ class Measure {
     if (dyn.isNotEmpty) j[_dynKey] = dyn;
     if (keySignature != null) j[_keyKey] = keySignature;
     if (timeSignature != null) j[_tsKey] = timeSignature!.vex;
+    if (barline != null && !barline!.isDefault) j[_barKey] = barline!.id;
     return j;
   }
 
   /// Render-проекция для движка: ноты как natural-aware ключи VexFlow + оттенки
-  /// под `_dyn` + смена тональности под `_key` + смена размера под `_ts` (движок
-  /// индексирует такт по голосам/`_dyn`/`_key`/`_ts` явно, не итерируя ключи,
-  /// поэтому лишние ключи безопасны). `_key` читают effectiveKeys/compiler/render/
-  /// print; `_ts` — effectiveTimeSignatures (та же тройка).
+  /// под `_dyn` + смена тональности под `_key` + смена размера под `_ts` + тактовая
+  /// черта под `_bar` (движок индексирует такт по голосам/`_dyn`/`_key`/`_ts`/`_bar`
+  /// явно, не итерируя ключи, поэтому лишние ключи безопасны). `_key` читают
+  /// effectiveKeys/compiler/render/print; `_ts` — effectiveTimeSignatures; `_bar`
+  /// — domain/barlines (render/print). Playback `_bar` игнорирует (нотация-only).
   Map<String, dynamic> toRenderJson() {
     final j = <String, dynamic>{
       for (final entry in voices.entries)
@@ -592,6 +661,7 @@ class Measure {
     if (dyn.isNotEmpty) j[_dynKey] = dyn;
     if (keySignature != null) j[_keyKey] = keySignature;
     if (timeSignature != null) j[_tsKey] = timeSignature!.vex;
+    if (barline != null && !barline!.isDefault) j[_barKey] = barline!.id;
     return j;
   }
 
@@ -600,6 +670,7 @@ class Measure {
     final dynamics = <String, List<Dynamic>>{};
     String? keySignature;
     TimeSignature? timeSignature;
+    BarlineType? barline;
     for (final entry in j.entries) {
       if (entry.key == _dynKey) {
         final m = entry.value as Map<String, dynamic>;
@@ -620,6 +691,10 @@ class Measure {
         timeSignature = raw == null ? null : TimeSignature.parse(raw as String);
         continue;
       }
+      if (entry.key == _barKey) {
+        barline = BarlineType.fromId(entry.value as String?);
+        continue;
+      }
       voices[entry.key] = (entry.value as List)
           .map((e) => MusicNote.fromJson(e as Map<String, dynamic>))
           .toList();
@@ -627,7 +702,8 @@ class Measure {
     return Measure(voices,
         dynamics: dynamics,
         keySignature: keySignature,
-        timeSignature: timeSignature);
+        timeSignature: timeSignature,
+        barline: barline);
   }
 }
 
