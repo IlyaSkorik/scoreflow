@@ -13,7 +13,7 @@ import { drawSelectionHighlight, keepCursorInView, attachTapListener } from './g
 import { effectiveKeys, cancelKeyFor } from '../domain/keysig.js';
 import { effectiveTimeSignatures } from '../domain/timesig.js';
 import { effectiveBarlines } from '../domain/barlines.js';
-import { setupBarline, drawCustomBarline } from './barlines.js';
+import { setupBarline, drawCustomBarline, setupGrandBarline, drawGrandBarline } from './barlines.js';
 import { Playback } from '../playback/scheduler.js';
 
 function clearCanvas() {
@@ -239,14 +239,13 @@ export function render(score, forcedWidth) {
                         treble.addTimeSignature(tsStr[i]);
                         bass.addTimeSignature(tsStr[i]);
                     }
-                    // Тактовая черта на ОБОИХ станах grand staff (как одиночная
-                    // линия сейчас) — нативный тип до draw, кастартная после.
-                    setupBarline(VF, treble, bars[i]);
-                    setupBarline(VF, bass, bars[i]);
+                    // Тактовая черта grand staff — ОДНА сплошная через всю
+                    // аколаду (верх treble → низ bass), а не две на каждом
+                    // стане: per-stave линии гасим (NONE), спан рисуем после.
+                    setupGrandBarline(VF, treble, bass);
                     treble.setContext(ctx).draw();
                     bass.setContext(ctx).draw();
-                    drawCustomBarline(VF, ctx, treble, bars[i]);
-                    drawCustomBarline(VF, ctx, bass, bars[i]);
+                    drawGrandBarline(VF, ctx, treble, bass, bars[i]);
 
                     const tIdx = (cursor.measure === i && cursor.voice === 'treble')
                         ? cursor.index : -1;

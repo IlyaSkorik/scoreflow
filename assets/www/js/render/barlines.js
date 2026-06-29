@@ -25,6 +25,67 @@ export function setupBarline(VF, stave, id) {
     if (t != null) stave.setEndBarType(t);
 }
 
+// === Grand staff (аколада) ==========================================
+// На фортепиано тактовая черта — ОДНА сплошная через ВСЮ аколаду (верх верхнего
+// стана → низ нижнего), а НЕ две отдельные на каждом стане. Поэтому per-stave
+// линии гасим (setupGrandBarline -> NONE), а спан рисуем через VexFlow
+// StaveConnector (нативные типы) или своей линией (кастартные) — так черта
+// непрерывна через зазор между станами, как требует гравировка.
+
+// Тип правого коннектора VexFlow по нативному типу барлайна (single/double/
+// final). Двойная = THIN_DOUBLE (две тонкие), финальная = BOLD_DOUBLE_RIGHT
+// (тонкая+толстая). null -> коннектор не рисуем (невидимая).
+const GRAND_CONNECTOR = {
+    SINGLE: 'SINGLE_RIGHT',
+    DOUBLE: 'THIN_DOUBLE',
+    END: 'BOLD_DOUBLE_RIGHT',
+    NONE: null, // invisible — место есть, линии нет
+};
+
+// Погасить нативные правые черты ОБОИХ станов аколады ДО их отрисовки — спан
+// рисуем сами (drawGrandBarline). Вызывать до draw.
+export function setupGrandBarline(VF, topStave, bottomStave) {
+    const none = VF.Barline.type.NONE;
+    topStave.setEndBarType(none);
+    bottomStave.setEndBarType(none);
+}
+
+// Нарисовать тактовую черту через всю аколаду на правой границе. Нативные типы —
+// StaveConnector (single/double/final), невидимая — ничего. Кастартные —
+// своей линией: dashed/dotted тянутся через всю аколаду; tick/short остаются
+// короткими у верхнего стана (короткие по определению). Вызывать ПОСЛЕ draw.
+export function drawGrandBarline(VF, ctx, topStave, bottomStave, id) {
+    const spec = barlineSpec(id);
+    if (spec.native) {
+        const connName = GRAND_CONNECTOR[spec.native];
+        if (!connName) return; // невидимая / неизвестный — линии нет
+        const c = new VF.StaveConnector(topStave, bottomStave);
+        c.setType(VF.StaveConnector.type[connName]);
+        c.setContext(ctx).draw();
+        return;
+    }
+    const x = topStave.getX() + topStave.getWidth();
+    const yTop = topStave.getYForLine(0);
+    const yBot = bottomStave.getYForLine(4); // низ нижнего стана аколады
+    const space = topStave.getYForLine(1) - yTop;
+    switch (spec.custom) {
+        case 'dashed':
+            strokeVertical(ctx, x, yTop, yBot, [5, 3.2]);
+            break;
+        case 'dotted':
+            dottedVertical(ctx, x, yTop, yBot, space);
+            break;
+        case 'tick':
+            strokeVertical(ctx, x, yTop - space, yTop + space, null);
+            break;
+        case 'short':
+            // Короткая черта по середине ВЕРХНЕГО стана (lines 1..3).
+            strokeVertical(ctx, x, topStave.getYForLine(1),
+                topStave.getYForLine(3), null);
+            break;
+    }
+}
+
 // Нарисовать КАСТОМНУЮ тактовую черту (dashed/dotted/tick/short) на правой
 // границе [stave]. Для нативных типов — no-op (их рисует VexFlow в stave.draw()).
 // Вызывать ПОСЛЕ stave.draw(). Геометрию берём из стана (X правой границы и Y

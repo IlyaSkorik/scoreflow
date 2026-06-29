@@ -17,7 +17,7 @@ import { voiceListOf, nextRealNote, sameKeys } from '../domain/notes.js';
 import { effectiveKeys, cancelKeyFor } from '../domain/keysig.js';
 import { effectiveTimeSignatures } from '../domain/timesig.js';
 import { effectiveBarlines } from '../domain/barlines.js';
-import { setupBarline, drawCustomBarline } from './barlines.js';
+import { setupBarline, drawCustomBarline, drawGrandBarline } from './barlines.js';
 import { drawDynamic } from './dynamics.js';
 import { dynamicsBaseline } from './dynamics_layout.js';
 import { noteOnsets, indexAtBeat } from '../domain/dynamics.js';
@@ -167,7 +167,11 @@ function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
                 if (midChange) stave.addKeySignature(effKeys[idx], midCancel);
                 if (midTimeChange) stave.addTimeSignature(tsStr[idx]);
             }
-            setupBarline(VF, stave, bars[idx]); // правая граница (до format/draw)
+            // Правая граница до format/draw. На аколаде (grand staff) per-stave
+            // линии гасим — черту рисуем одной через всю аколаду после draw;
+            // на одиночном стане (ударные) ставим нативный тип сразу.
+            if (cfg.grand) stave.setEndBarType(VF.Barline.type.NONE);
+            else setupBarline(VF, stave, bars[idx]);
             stave.setContext(ctx);
             stave.format();
             return stave;
@@ -199,9 +203,14 @@ function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
         f.format(voices, contentW);
 
         staves.forEach(function (s) { s.draw(); });
-        // Кастартные черты (dashed/dotted/tick/short) — после draw, общим с
-        // экраном кодом (render/barlines). Нативные уже нарисовал VexFlow.
-        staves.forEach(function (s) { drawCustomBarline(VF, ctx, s, bars[idx]); });
+        // Тактовая черта — ПОСЛЕ draw, общим с экраном кодом (render/barlines).
+        // Аколада: одна сплошная через оба стана; одиночный стан (ударные):
+        // нативную нарисовал VexFlow, кастартную дорисовываем здесь.
+        if (cfg.grand) {
+            drawGrandBarline(VF, ctx, staves[0], staves[staves.length - 1], bars[idx]);
+        } else {
+            staves.forEach(function (s) { drawCustomBarline(VF, ctx, s, bars[idx]); });
+        }
         voices.forEach(function (v, si) {
             // Балки создаём ДО отрисовки нот: тогда у забимованных нот
             // не рисуются одиночные флажки (хвосты).

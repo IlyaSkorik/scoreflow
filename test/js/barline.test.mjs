@@ -15,7 +15,11 @@ import {
     effectiveBarlines,
     nativeBarType,
 } from '../../assets/www/js/domain/barlines.js';
-import { setupBarline } from '../../assets/www/js/render/barlines.js';
+import {
+    setupBarline,
+    setupGrandBarline,
+    drawGrandBarline,
+} from '../../assets/www/js/render/barlines.js';
 
 let failed = 0;
 function eq(name, got, want) {
@@ -41,6 +45,16 @@ const FAKE_VF = {
 };
 function fakeStave() {
     return { _end: undefined, setEndBarType(t) { this._end = t; } };
+}
+
+// Минимальный no-op 2D-контекст (кастартная отрисовка не должна падать в node).
+function fakeCtx() {
+    const noop = () => { };
+    return {
+        save: noop, restore: noop, beginPath: noop, moveTo: noop, lineTo: noop,
+        stroke: noop, fill: noop, setLineWidth: noop, setStrokeStyle: noop,
+        setFillStyle: noop, setLineDash: noop, setLineCap: noop,
+    };
 }
 
 console.log('parseBarline — normalization:');
@@ -110,6 +124,52 @@ console.log('setupBarline — native type on stave, NONE for custom/invisible:')
         setupBarline(FAKE_VF, s, id);
         eq(id + ' stave end = NONE(7) (custom drawn separately)', s._end, 7);
     }
+}
+
+console.log('grand staff (accolade) — one spanning barline, not per-stave:');
+{
+    // Фейк StaveConnector: записывает выбранный тип; фейк стана отдаёт геометрию.
+    let lastConn = null;
+    const VF2 = {
+        Barline: { type: { NONE: 7 } },
+        StaveConnector: function () {
+            return {
+                setType(t) { lastConn = t; return this; },
+                setContext() { return this; },
+                draw() { },
+            };
+        },
+    };
+    VF2.StaveConnector.type =
+        { SINGLE_RIGHT: 0, THIN_DOUBLE: 7, BOLD_DOUBLE_RIGHT: 6 };
+    const grandStave = () => ({
+        _end: undefined,
+        setEndBarType(t) { this._end = t; },
+        getX() { return 0; },
+        getWidth() { return 100; },
+        getYForLine(n) { return n * 10; },
+    });
+
+    // setupGrandBarline гасит ОБЕ правые черты (спан рисуем сами).
+    const t = grandStave(), b = grandStave();
+    setupGrandBarline(VF2, t, b);
+    eq('treble end = NONE', t._end, 7);
+    eq('bass end = NONE', b._end, 7);
+
+    // drawGrandBarline выбирает правый коннектор по типу (одна линия через
+    // всю аколаду, не две на каждом стане).
+    lastConn = null; drawGrandBarline(VF2, null, t, b, 'normal');
+    eq('normal -> SINGLE_RIGHT', lastConn, 0);
+    lastConn = null; drawGrandBarline(VF2, null, t, b, 'double');
+    eq('double -> THIN_DOUBLE', lastConn, 7);
+    lastConn = null; drawGrandBarline(VF2, null, t, b, 'final');
+    eq('final -> BOLD_DOUBLE_RIGHT', lastConn, 6);
+    lastConn = null; drawGrandBarline(VF2, null, t, b, 'invisible');
+    eq('invisible -> no connector', lastConn, null);
+    // Кастартные (dashed/dotted/tick/short) не используют коннектор —
+    // рисуются своей линией (ctx тут не вызывается, коннектор не трогается).
+    lastConn = null; drawGrandBarline(VF2, fakeCtx(), t, b, 'dashed');
+    eq('dashed -> custom (no connector)', lastConn, null);
 }
 
 console.log('extensibility — repeat types are native (future Repeat System):');
