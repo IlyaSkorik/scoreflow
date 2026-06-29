@@ -83,13 +83,21 @@ eq('native set', ['normal', 'double', 'final', 'invisible'].map(isNativeBarline)
 eq('custom set', ['dashed', 'dotted', 'tick', 'short'].map(isNativeBarline),
     [false, false, false, false]);
 
-console.log('effectiveBarlines — reads _bar per measure (no carry-forward):');
-eq('per-measure, default normal',
-    effectiveBarlines([{ _bar: 'final' }, {}, { _bar: 'dashed' }, { _bar: 'bogus' }]),
-    ['final', 'normal', 'dashed', 'normal']);
+console.log('effectiveBarlines — per-measure + positional final default at end:');
+eq('explicit kept; mid normal; last explicit overrides default',
+    effectiveBarlines([{ _bar: 'final' }, {}, { _bar: 'dashed' }]),
+    ['final', 'normal', 'dashed']);
+eq('last measure defaults to final (end of piece)',
+    effectiveBarlines([{}, {}, {}]), ['normal', 'normal', 'final']);
+eq('single-measure score ends with final',
+    effectiveBarlines([{}]), ['final']);
 eq('empty score -> []', effectiveBarlines([]), []);
+eq('explicit double on last overrides the final default',
+    effectiveBarlines([{}, { _bar: 'double' }]), ['normal', 'double']);
 eq('does NOT carry forward (unlike key/ts)',
-    effectiveBarlines([{ _bar: 'double' }, {}]), ['double', 'normal']);
+    effectiveBarlines([{ _bar: 'double' }, {}]), ['double', 'final']);
+eq('unknown _bar on a non-last measure -> normal',
+    effectiveBarlines([{ _bar: 'bogus' }, {}]), ['normal', 'final']);
 
 console.log('nativeBarType — maps id to VexFlow Barline.type constant:');
 eq('normal -> SINGLE(1)', nativeBarType(FAKE_VF, 'normal'), 1);

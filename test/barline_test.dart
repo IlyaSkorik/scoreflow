@@ -134,25 +134,29 @@ void main() {
   });
 
   group('editor operation semantics (mirror of _setMeasureBarline)', () {
+    // Зеркало _setMeasureBarline: храним только отклонение от позиционного
+    // дефолта (последний такт -> финальная, прочие -> обычная).
     void setBarline(Score s, int m, BarlineType? type) {
+      final chosen = type ?? BarlineType.normal;
+      final def = s.defaultBarlineAt(m);
       s.measures[m].barline =
-          (type == null || type.isDefault) ? null : type;
+          (chosen.isDefault || chosen == def) ? null : chosen;
     }
 
     test('set a barline on a measure', () {
       final s = scoreWith([measure(), measure()]);
-      setBarline(s, 1, BarlineType.doubleBar);
-      expect(s.measures[1].barline, BarlineType.doubleBar);
+      setBarline(s, 0, BarlineType.doubleBar); // не последний -> хранится
+      expect(s.measures[0].barline, BarlineType.doubleBar);
     });
 
-    test('replace a barline in place', () {
-      final s = scoreWith([measure(bar: BarlineType.dashed)]);
+    test('replace a barline in place (non-final measure)', () {
+      final s = scoreWith([measure(bar: BarlineType.dashed), measure()]);
       setBarline(s, 0, BarlineType.finalBar);
       expect(s.measures[0].barline, BarlineType.finalBar);
     });
 
     test('remove (back to normal) clears the override to null', () {
-      final s = scoreWith([measure(bar: BarlineType.finalBar)]);
+      final s = scoreWith([measure(bar: BarlineType.dashed), measure()]);
       setBarline(s, 0, BarlineType.normal);
       expect(s.measures[0].barline, isNull);
       setBarline(s, 0, null);
@@ -160,10 +164,46 @@ void main() {
     });
 
     test('invisible is an explicit type, not a removal', () {
-      final s = scoreWith([measure()]);
+      final s = scoreWith([measure(), measure()]);
       setBarline(s, 0, BarlineType.invisible);
       expect(s.measures[0].barline, BarlineType.invisible);
       expect(s.measures[0].toJson()['_bar'], 'invisible');
+    });
+
+    test('choosing final on the last measure collapses to null (auto-follows end)',
+        () {
+      final s = scoreWith([measure(), measure()]);
+      setBarline(s, 1, BarlineType.finalBar); // = позиционный дефолт конца
+      expect(s.measures[1].barline, isNull);
+      expect(s.effectiveBarlineAt(1), BarlineType.finalBar); // всё равно финальная
+    });
+  });
+
+  group('final barline default at end (positional)', () {
+    test('last measure defaults to final, others to normal', () {
+      final s = scoreWith([measure(), measure(), measure()]);
+      expect(s.defaultBarlineAt(0), BarlineType.normal);
+      expect(s.defaultBarlineAt(2), BarlineType.finalBar);
+      expect(s.effectiveBarlineAt(0), BarlineType.normal);
+      expect(s.effectiveBarlineAt(2), BarlineType.finalBar);
+    });
+
+    test('single-measure score ends with a final barline', () {
+      final s = scoreWith([measure()]);
+      expect(s.effectiveBarlineAt(0), BarlineType.finalBar);
+    });
+
+    test('explicit override beats the positional default', () {
+      final s = scoreWith([measure(), measure(bar: BarlineType.doubleBar)]);
+      expect(s.effectiveBarlineAt(1), BarlineType.doubleBar);
+    });
+
+    test('default is positional: not stored, so it auto-moves with the end', () {
+      final s = scoreWith([measure(), measure()]);
+      // Конец не хранит явную черту — финальная это лишь действующий дефолт.
+      expect(s.measures[1].barline, isNull);
+      expect(s.measures[1].toJson().containsKey('_bar'), isFalse);
+      expect(s.effectiveBarlineAt(1), BarlineType.finalBar);
     });
   });
 

@@ -1028,9 +1028,14 @@ class _EditorScreenState extends State<EditorScreen> {
   /// persist -> Undo/Redo). Доступно обоим инструментам (черта есть и у ударных).
   void _setMeasureBarline(BarlineType? type) {
     final m = _cursor.measure;
+    final chosen = type ?? BarlineType.normal;
+    final def = _score!.defaultBarlineAt(m);
     _commit(() {
+      // Храним ТОЛЬКО отклонение от позиционного дефолта: совпало с дефолтом
+      // (или обычная одиночная) -> null. Тогда финальная черта конца партитуры
+      // сама переедет при добавлении такта/reflow, а явные типы остаются.
       _score!.measures[m].barline =
-          (type == null || type.isDefault) ? null : type;
+          (chosen.isDefault || chosen == def) ? null : chosen;
     });
   }
 
@@ -1202,7 +1207,9 @@ class _EditorScreenState extends State<EditorScreen> {
                 // Undo/Redo и автосейв. Доступно обоим инструментам.
                 Builder(builder: (ctx) {
                   final m = _cursor.measure;
-                  final cur = score.measures[m].barline ?? BarlineType.normal;
+                  // Показываем ДЕЙСТВУЮЩУЮ черту: на последнем такте без override
+                  // это финальная (позиционный дефолт), а не «обычная».
+                  final cur = score.effectiveBarlineAt(m);
                   return ListTile(
                     contentPadding: const EdgeInsets.symmetric(horizontal: 8),
                     leading: const Icon(Icons.view_week_outlined),

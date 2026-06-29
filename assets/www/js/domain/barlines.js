@@ -53,14 +53,22 @@ export function isNativeBarline(id) {
 }
 
 // Тактовая черта правой границы КАЖДОГО такта — массив id по индексу. В отличие
-// от тональности/размера черта НЕ тянется вперёд: у каждого такта своя граница,
-// по умолчанию 'normal'. ЕДИНОЕ место чтения `_bar` (render/print не лезут в
-// поле напрямую). Возвращает массив длиной measures.length.
+// от тональности/размера черта НЕ тянется вперёд: у каждого такта своя граница.
+// Дефолт ПОЗИЦИОННЫЙ: ПОСЛЕДНИЙ такт партитуры без явного `_bar` — финальная
+// (завершающая) черта (профессиональная конвенция конца пьесы), прочие —
+// обычная. Явный `_bar` (override) переопределяет дефолт. ЕДИНОЕ место чтения
+// `_bar` (render/print не лезут в поле напрямую). Зеркало Dart
+// Score.effectiveBarlineAt. Возвращает массив длиной measures.length.
 export function effectiveBarlines(measures) {
     const ms = measures || [];
     const out = [];
+    const last = ms.length - 1;
     for (let i = 0; i < ms.length; i++) {
-        out.push(parseBarline(ms[i] && ms[i]._bar));
+        const raw = ms[i] && ms[i]._bar;
+        const id = (raw == null)
+            ? (i === last ? 'final' : 'normal') // позиционный дефолт
+            : parseBarline(raw);                // явный override
+        out.push(id);
     }
     return out;
 }

@@ -829,6 +829,24 @@ class Score {
     return cur;
   }
 
+  /// Тактовая черта ПО УМОЛЧАНИЮ на границе такта [measure] (по ПОЗИЦИИ): на
+  /// ПОСЛЕДНЕМ такте партитуры — финальная (завершающая), иначе обычная
+  /// одиночная. Профессиональная конвенция (MuseScore/Dorico/Finale): конец
+  /// пьесы помечается тонкой+толстой чертой. Дефолт ПОЗИЦИОННЫЙ: при добавлении
+  /// такта «финальная» сама переезжает в новый конец, а явные override
+  /// ([Measure.barline]) остаются на своих тактах.
+  BarlineType defaultBarlineAt(int measure) =>
+      measure == measures.length - 1
+          ? BarlineType.finalBar
+          : BarlineType.normal;
+
+  /// Действующая тактовая черта такта [measure]: явный override
+  /// ([Measure.barline]) либо позиционный дефолт ([defaultBarlineAt]). Зеркало
+  /// движкового domain/barlines.effectiveBarlines для модели/UI/тестов; РЕАЛЬНАЯ
+  /// гравировка — в движке.
+  BarlineType effectiveBarlineAt(int measure) =>
+      measures[measure].barline ?? defaultBarlineAt(measure);
+
   String encode() => jsonEncode(toJson());
 
   factory Score.decode(String raw) =>

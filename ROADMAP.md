@@ -118,6 +118,8 @@ Secondary goals:
   * Tick
   * Short
   * Invisible (occupies layout, draws nothing)
+  * Automatic final barline at the end of the score (positional default)
+  * Single spanning barline across the grand-staff accolade
   * Native VexFlow engraving where available (single/double/final/invisible)
   * Custom professional engraving where not (dashed/dotted/tick/short)
   * Shared screen/PDF rendering (visually identical)
