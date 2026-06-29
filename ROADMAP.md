@@ -4,8 +4,9 @@
 > against the actual codebase, not aspirations.
 >
 > Last reviewed: **2026-06-29** · Flutter 3.44.3 · Material 3 · VexFlow 4.2.2 · ES Modules.
-> Latest: mid-score time signature changes (per-measure meter, meter-aware reflow,
-> per-measure beaming & playback grid).
+> Latest: professional Barline System (8 types — first-class per-measure notation
+> object, native VexFlow + custom engraving, shared screen/PDF, reflow-safe;
+> architectural foundation for the Repeat System).
 
 ---
 
@@ -106,6 +107,22 @@ Secondary goals:
   * Compound & irregular meters (6/8, 7/8, 9/8, 12/8, 5/8 …)
   * Playback meter grid + per-measure metronome accents
   * Reflow-safe positional anchor
+* [x] Barlines
+
+  * First-class notation object (per measure-boundary `_bar`)
+  * Normal (single)
+  * Double
+  * Final
+  * Dashed
+  * Dotted
+  * Tick
+  * Short
+  * Invisible (occupies layout, draws nothing)
+  * Native VexFlow engraving where available (single/double/final/invisible)
+  * Custom professional engraving where not (dashed/dotted/tick/short)
+  * Shared screen/PDF rendering (visually identical)
+  * Reflow-safe positional anchor (by measure index)
+  * Architectural foundation for the Repeat System (REPEAT_* are native VexFlow types)
 * [x] Accidentals
 
   * Sharp
@@ -212,23 +229,20 @@ Secondary goals:
 
 ## 🎼 Musical Core (Highest Priority)
 
-### Barlines
+### Repeats
 
-* [ ] Single
-* [ ] Double
-* [ ] Final
+> Builds directly on the completed **Barline System**: repeat barlines are native
+> VexFlow types (`REPEAT_BEGIN` / `REPEAT_END` / `REPEAT_BOTH`) that drop into the
+> existing `BarlineType` model and `domain/barlines` resolution without a redesign.
+> A begin-barline slot (`_barStart`) reuses the same positional anchor for repeat
+> starts. Voltas / D.C. / D.S. / Fine / Coda become sibling notation objects with
+> the same per-measure anchor.
+
 * [ ] Repeat Begin (`|:`)
 * [ ] Repeat End (`:|`)
 * [ ] Repeat Both (`:|:`)
-* [ ] Invisible
-* [ ] Dashed
-
----
-
-### Repeats
-
-* [ ] First ending
-* [ ] Second ending
+* [ ] First ending (volta)
+* [ ] Second ending (volta)
 * [ ] D.C. al Fine
 * [ ] D.S. al Coda
 * [ ] Segno
