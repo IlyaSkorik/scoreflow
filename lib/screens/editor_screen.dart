@@ -47,6 +47,13 @@ const Map<BarlineType, String> _barlineLabels = {
   BarlineType.invisible: 'Невидимая',
 };
 
+const Map<RepeatMark?, String> _repeatLabels = {
+  null: 'Нет',
+  RepeatMark.start: 'Начало |:',
+  RepeatMark.end: 'Конец :|',
+  RepeatMark.both: 'Обе :|:',
+};
+
 /// Редактор партитуры: WebView-рендер (VexFlow) + панель ввода нот + плеер.
 class EditorScreen extends StatefulWidget {
   final String scoreId;
@@ -230,6 +237,7 @@ class _EditorScreenState extends State<EditorScreen> {
     final keysByIndex = s.measures.map((m) => m.keySignature).toList();
     final tsByIndex = s.measures.map((m) => m.timeSignature).toList();
     final barByIndex = s.measures.map((m) => m.barline).toList();
+    final repeatByIndex = s.measures.map((m) => m.repeat).toList();
 
     // ДЕЙСТВУЮЩИЙ размер такта по индексу — ЕДИНЫЙ источник ёмкости. Смены
     // размера позиционны (по индексу), поэтому одна функция описывает и старую,
@@ -275,6 +283,7 @@ class _EditorScreenState extends State<EditorScreen> {
         keySignature: i < keysByIndex.length ? keysByIndex[i] : null,
         timeSignature: i < tsByIndex.length ? tsByIndex[i] : null,
         barline: i < barByIndex.length ? barByIndex[i] : null,
+        repeat: i < repeatByIndex.length ? repeatByIndex[i] : null,
       ));
     }
 
@@ -1039,6 +1048,16 @@ class _EditorScreenState extends State<EditorScreen> {
     });
   }
 
+  /// Инструмент «Повтор» — вставка/замена/снятие репризы на границе текущего
+  /// такта. Повтор хранится отдельно от `_bar`: renderer рисует знак, playback
+  /// compiler расширяет порядок воспроизведения, scheduler остаётся простым.
+  void _setMeasureRepeat(RepeatMark? repeat) {
+    final m = _cursor.measure;
+    _commit(() {
+      _score!.measures[m].repeat = repeat;
+    });
+  }
+
   /// Нижний лист «Ещё» — редкие действия вне рабочей зоны: точный темп,
   /// sustain (фортепиано), параметры партитуры (тональность/размер),
   /// добавление такта, переименование, экспорт PDF.
@@ -1224,6 +1243,27 @@ class _EditorScreenState extends State<EditorScreen> {
                       onChanged: (v) {
                         if (v == null) return;
                         _setMeasureBarline(v);
+                        setSheet(() {});
+                      },
+                    ),
+                  );
+                }),
+                Builder(builder: (ctx) {
+                  final m = _cursor.measure;
+                  final cur = score.measures[m].repeat;
+                  return ListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                    leading: const Icon(Icons.repeat),
+                    title: Text('Повтор (такт ${m + 1})'),
+                    trailing: DropdownButton<RepeatMark?>(
+                      value: cur,
+                      items: [
+                        for (final entry in _repeatLabels.entries)
+                          DropdownMenuItem<RepeatMark?>(
+                              value: entry.key, child: Text(entry.value)),
+                      ],
+                      onChanged: (v) {
+                        _setMeasureRepeat(v);
                         setSheet(() {});
                       },
                     ),
