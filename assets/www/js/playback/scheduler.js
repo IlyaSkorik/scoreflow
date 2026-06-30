@@ -67,6 +67,7 @@ export const Playback = {
         // (четверти), разный при сменах размера. Индекс такта по доле берём из
         // domain/timesig (тот же поиск, что в compiler/reflow).
         const starts = this.comp.starts || [0];
+        const order = this.comp.measureOrder || [];
 
         const byRow = [];
         for (let r = 0; r < rows; r++) byRow.push({});
@@ -77,7 +78,8 @@ export const Playback = {
             const hb = state.noteHitIndex[e.noteId];
             if (!hb) continue;
             const mIdx = measureIndexAtBeat(starts, e.startBeat);
-            const g = geom[mIdx];
+            const sourceIdx = order[mIdx] != null ? order[mIdx] : mIdx;
+            const g = geom[sourceIdx];
             if (!g) continue;
             const slot = byRow[g.row];
             const key = e.startBeat.toFixed(4);
@@ -90,8 +92,10 @@ export const Playback = {
         // якоря — куда доезжает линия на долгих нотах в конце системы)
         const rowRight = [], rowLastBeat = [];
         for (let r = 0; r < rows; r++) { rowRight.push(0); rowLastBeat.push(0); }
-        for (let mi = 0; mi < geom.length; mi++) {
-            const g = geom[mi];
+        const totalMeasures = Math.max(0, starts.length - 1);
+        for (let mi = 0; mi < totalMeasures; mi++) {
+            const sourceIdx = order[mi] != null ? order[mi] : mi;
+            const g = geom[sourceIdx];
             if (!g) continue;
             const right = g.x + g.w;
             if (right > rowRight[g.row]) rowRight[g.row] = right;
@@ -210,13 +214,15 @@ export const Playback = {
     // Строка (система) для текущей доли — из такта, а не из id ноты.
     _rowForBeat: function (curBeat) {
         const starts = this.comp.starts || [0];
+        const order = this.comp.measureOrder || [];
         const total = this.comp.totalBeats;
         const geom = (state.lastLayout && state.lastLayout.geom) || [];
         const totalMeasures = Math.max(1, starts.length - 1);
         let mIdx = measureIndexAtBeat(starts, Math.max(0, Math.min(curBeat, total)));
         if (mIdx >= totalMeasures) mIdx = totalMeasures - 1;
         if (mIdx < 0) mIdx = 0;
-        return geom[mIdx] ? geom[mIdx].row : 0;
+        const sourceIdx = order[mIdx] != null ? order[mIdx] : mIdx;
+        return geom[sourceIdx] ? geom[sourceIdx].row : 0;
     },
 
     // Vertical Follow Playback: пока playhead внутри текущей системы —

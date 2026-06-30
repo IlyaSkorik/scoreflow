@@ -10,6 +10,7 @@ import { dynamicsTimeline, velocityAt } from '../domain/dynamics.js';
 import {
     effectiveTimeSignatures, measureCapacityQ, measureStarts, metronomeClicks,
 } from '../domain/timesig.js';
+import { expandMeasureOrder } from '../domain/repeats.js';
 
 // Tie-merge для playback: внутри каждого голоса (события уже в порядке
 // времени) поглощаем цепочку лиг длительности в одно событие — один
@@ -41,6 +42,42 @@ function mergeTies(events) {
         }
     }
     return out;
+}
+
+function expandEvents(linearEvents, order, originalStarts, originalCapsQ, effTs) {
+    const expandedCapsQ = order.map(function (mi) { return originalCapsQ[mi] || 0; });
+    const expandedStarts = measureStarts(expandedCapsQ);
+    const byMeasure = {};
+    for (let i = 0; i < linearEvents.length; i++) {
+        const e = linearEvents[i];
+        const parts = String(e.noteId).split(':');
+        const mi = Number(parts[0]);
+        (byMeasure[mi] || (byMeasure[mi] = [])).push(e);
+    }
+
+    const events = [];
+    for (let oi = 0; oi < order.length; oi++) {
+        const mi = order[oi];
+        const src = byMeasure[mi] || [];
+        const srcBase = originalStarts[mi] || 0;
+        const dstBase = expandedStarts[oi] || 0;
+        for (let k = 0; k < src.length; k++) {
+            const e = src[k];
+            events.push(Object.assign({}, e, {
+                startBeat: dstBase + (e.startBeat - srcBase),
+                playbackMeasure: oi,
+                sourceMeasure: mi,
+            }));
+        }
+    }
+    events.sort(function (a, b) { return a.startBeat - b.startBeat; });
+    return {
+        events: events,
+        starts: expandedStarts,
+        capsQ: expandedCapsQ,
+        totalBeats: expandedStarts[expandedStarts.length - 1] || 0,
+        clicks: metronomeClicks(order.map(function (mi) { return effTs[mi]; }), expandedStarts),
+    };
 }
 
 // --- Playback Compiler ---------------------------------------------
@@ -139,15 +176,26 @@ export function compilePlayback(payload) {
     // уже на общей beat-сетке). Slur на playback НЕ влияет.
     events = mergeTies(events);
     events.sort(function (a, b) { return a.startBeat - b.startBeat; });
+
+    // Repeat expansion — единственное место, где playback узнаёт о репризах.
+    // Scheduler получает уже расширенные events/starts/clicks и не содержит
+    // repeat branches. Missing start repeat обрабатывает domain/repeats как
+    // повтор с начала; missing end repeat не меняет порядок.
+    const measureOrder = expandMeasureOrder(measures);
+    const expanded = expandEvents(events, measureOrder, starts, capsQ, effTs);
     return {
-        events: events,
-        totalBeats: totalBeats,
+        events: expanded.events,
+        linearEvents: events,
+        totalBeats: expanded.totalBeats,
+        linearTotalBeats: totalBeats,
         // Сетка тактов для планировщика: абсолютные старты (+финал) и ёмкости
         // (четверти) КАЖДОГО такта — единый источник для playhead/строк (вместо
         // прежнего глобального measureQ). Метроном — готовая сетка щелчков с
         // акцентами (по долям каждого такта), считается в domain/timesig.
-        starts: starts, capsQ: capsQ,
-        clicks: metronomeClicks(effTs, starts),
+        starts: expanded.starts, capsQ: expanded.capsQ,
+        linearStarts: starts, linearCapsQ: capsQ,
+        measureOrder: measureOrder,
+        clicks: expanded.clicks,
         isDrums: isDrums, primaryVoice: isDrums ? 'perc' : 'treble',
     };
 }
