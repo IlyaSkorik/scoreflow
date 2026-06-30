@@ -63,15 +63,22 @@ eq('unknown -> normal', parseBarline('nope'), 'normal');
 eq('null -> normal', parseBarline(null), 'normal');
 eq('undefined -> normal', parseBarline(undefined), 'normal');
 
-console.log('BARLINE_SPEC — all eight types present:');
+console.log('BARLINE_SPEC — notation barlines plus native repeat projections:');
 eq('type ids', Object.keys(BARLINE_SPEC).sort(),
-    ['dashed', 'dotted', 'double', 'final', 'invisible', 'normal', 'short', 'tick']);
+    ['dashed', 'dotted', 'double', 'final', 'invisible', 'normal',
+     'repeatBoth', 'repeatEnd', 'repeatStart', 'short', 'tick']);
 
 console.log('barlineSpec — native vs custom projection:');
 eq('normal -> native SINGLE', barlineSpec('normal'), { native: 'SINGLE', custom: null });
 eq('double -> native DOUBLE', barlineSpec('double'), { native: 'DOUBLE', custom: null });
 eq('final -> native END', barlineSpec('final'), { native: 'END', custom: null });
 eq('invisible -> native NONE', barlineSpec('invisible'), { native: 'NONE', custom: null });
+eq('repeatStart -> native REPEAT_BEGIN', barlineSpec('repeatStart'),
+    { native: 'REPEAT_BEGIN', custom: null });
+eq('repeatEnd -> native REPEAT_END', barlineSpec('repeatEnd'),
+    { native: 'REPEAT_END', custom: null });
+eq('repeatBoth -> native REPEAT_BOTH', barlineSpec('repeatBoth'),
+    { native: 'REPEAT_BOTH', custom: null });
 eq('dashed -> custom', barlineSpec('dashed'), { native: null, custom: 'dashed' });
 eq('dotted -> custom', barlineSpec('dotted'), { native: null, custom: 'dotted' });
 eq('tick -> custom', barlineSpec('tick'), { native: null, custom: 'tick' });
@@ -104,6 +111,9 @@ eq('normal -> SINGLE(1)', nativeBarType(FAKE_VF, 'normal'), 1);
 eq('double -> DOUBLE(2)', nativeBarType(FAKE_VF, 'double'), 2);
 eq('final -> END(3)', nativeBarType(FAKE_VF, 'final'), 3);
 eq('invisible -> NONE(7)', nativeBarType(FAKE_VF, 'invisible'), 7);
+eq('repeatStart -> REPEAT_BEGIN(4)', nativeBarType(FAKE_VF, 'repeatStart'), 4);
+eq('repeatEnd -> REPEAT_END(5)', nativeBarType(FAKE_VF, 'repeatEnd'), 5);
+eq('repeatBoth -> REPEAT_BOTH(6)', nativeBarType(FAKE_VF, 'repeatBoth'), 6);
 eq('dashed (custom) -> null', nativeBarType(FAKE_VF, 'dashed'), null);
 
 console.log('setupBarline — native type on stave, NONE for custom/invisible:');
