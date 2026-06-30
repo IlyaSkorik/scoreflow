@@ -124,7 +124,24 @@ Secondary goals:
   * Custom professional engraving where not (dashed/dotted/tick/short)
   * Shared screen/PDF rendering (visually identical)
   * Reflow-safe positional anchor (by measure index)
-  * Architectural foundation for the Repeat System (REPEAT_* are native VexFlow types)
+  * Shared boundary architecture used by the Repeat System
+* [x] Professional Repeat System
+
+  * First-class repeat notation object (per measure-boundary `_repeat`)
+  * Repeat Start (`|:`)
+  * Repeat End (`:|`)
+  * Repeat Both (`:|:`)
+  * Native VexFlow repeat barlines where available
+  * Shared screen/PDF repeat rendering through the barline renderer
+  * Compiler-resolved playback expansion
+  * Missing start repeat plays from the beginning
+  * Missing end repeat plays normally
+  * Deterministic playback order with no infinite loops
+  * Scheduler remains repeat-agnostic
+  * Undo / Redo
+  * Serialization, legacy loading, autosave
+  * Reflow-safe positional anchor (by measure index)
+  * Architectural foundation for Repeat Counts, Voltas, D.C., D.S., Fine, Segno, Coda
 * [x] Accidentals
 
   * Sharp
@@ -177,6 +194,7 @@ Secondary goals:
 * [x] Active note highlighting
 * [x] Compiler-resolved accidentals
 * [x] Compiler-resolved dynamics
+* [x] Compiler-resolved repeats
 * [x] Shared perceptual velocity curve
 * [x] Unified velocity → gain pipeline
 
@@ -202,6 +220,7 @@ Secondary goals:
 * [x] Chord input
 * [x] Slur creation
 * [x] Dynamics editor
+* [x] Repeat editor
 * [x] Score library
 
   * Create
@@ -231,18 +250,13 @@ Secondary goals:
 
 ## 🎼 Musical Core (Highest Priority)
 
-### Repeats
+### Repeat Extensions
 
-> Builds directly on the completed **Barline System**: repeat barlines are native
-> VexFlow types (`REPEAT_BEGIN` / `REPEAT_END` / `REPEAT_BOTH`) that drop into the
-> existing `BarlineType` model and `domain/barlines` resolution without a redesign.
-> A begin-barline slot (`_barStart`) reuses the same positional anchor for repeat
-> starts. Voltas / D.C. / D.S. / Fine / Coda become sibling notation objects with
-> the same per-measure anchor.
+> Builds directly on the completed **Professional Repeat System**. Repeat
+> Counts, Voltas, D.C., D.S., Fine, Segno and Coda are sibling boundary objects
+> that extend the same compiler expansion pipeline; scheduler remains unchanged.
 
-* [ ] Repeat Begin (`|:`)
-* [ ] Repeat End (`:|`)
-* [ ] Repeat Both (`:|:`)
+* [ ] Repeat Count
 * [ ] First ending (volta)
 * [ ] Second ending (volta)
 * [ ] D.C. al Fine

@@ -79,6 +79,7 @@ Unlike traditional desktop-first notation software, ScoreFlow is designed with a
 | Time signatures        |    ✅   |
 | Mid-score meter changes|    ✅   |
 | Barlines (8 types)     |    ✅   |
+| Repeats                |    ✅   |
 | Professional beaming   |    ✅   |
 | Automatic rest filling |    ✅   |
 | Undo / Redo            |    ✅   |
