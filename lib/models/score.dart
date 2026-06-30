@@ -237,6 +237,33 @@ enum BarlineType {
       };
 }
 
+/// Реприза на границе такта — FIRST-CLASS нотационный объект, отдельный от
+/// [BarlineType]. Обычные тактовые черты остаются `_bar`; повтор хранится в
+/// `_repeat`, потому что playback обязан читать семантику повтора, а не
+/// рендер-флаг. Значение привязано к ПРАВОЙ границе такта: `start` открывает
+/// повтор после этой границы, `end` закрывает повтор на этой границе, `both`
+/// закрывает предыдущий и сразу открывает следующий.
+///
+/// Future-ready: repeat count, volta, D.C./D.S./Fine/Coda станут соседними
+/// объектами на той же границе, без переделки нот, рендера или scheduler.
+enum RepeatMark {
+  start,
+  end,
+  both;
+
+  String get id => name;
+
+  bool get opensRepeat => this == RepeatMark.start || this == RepeatMark.both;
+  bool get closesRepeat => this == RepeatMark.end || this == RepeatMark.both;
+
+  static RepeatMark? fromId(String? id) => switch (id) {
+        'start' => RepeatMark.start,
+        'end' => RepeatMark.end,
+        'both' => RepeatMark.both,
+        _ => null,
+      };
+}
+
 /// Знак альтерации головки ноты. ОТДЕЛЬНАЯ модель (не bool) — как в MuseScore/
 /// Dorico/Finale. Архитектура расширяема до микротонов/четвертьтонов простым
 /// добавлением значений: каждое значение само знает свой сдвиг в полутонах и
@@ -586,16 +613,23 @@ class Measure {
   /// старые файлы без него грузятся, нормальная черта не пишется (лаконичный JSON).
   BarlineType? barline;
 
+  /// Реприза на той же ПРАВОЙ границе такта или null — нет повтора. Это не
+  /// разновидность `_bar`: renderer может проецировать её в нативный VexFlow
+  /// repeat barline, но playback compiler читает именно `_repeat`.
+  RepeatMark? repeat;
+
   static const String _dynKey = '_dyn';
   static const String _keyKey = '_key';
   static const String _tsKey = '_ts';
   static const String _barKey = '_bar';
+  static const String _repeatKey = '_repeat';
 
   Measure(this.voices,
       {Map<String, List<Dynamic>>? dynamics,
       this.keySignature,
       this.timeSignature,
-      this.barline})
+      this.barline,
+      this.repeat})
       : dynamics = dynamics ?? {};
 
   factory Measure.empty(InstrumentType instrument) => Measure({
@@ -623,6 +657,7 @@ class Measure {
             ? null
             : TimeSignature(timeSignature!.beats, timeSignature!.beatValue),
         barline: barline,
+        repeat: repeat,
       );
 
   /// JSON оттенков по голосам (только непустые списки) — общий для persistence
@@ -643,6 +678,7 @@ class Measure {
     if (keySignature != null) j[_keyKey] = keySignature;
     if (timeSignature != null) j[_tsKey] = timeSignature!.vex;
     if (barline != null && !barline!.isDefault) j[_barKey] = barline!.id;
+    if (repeat != null) j[_repeatKey] = repeat!.id;
     return j;
   }
 
@@ -662,6 +698,7 @@ class Measure {
     if (keySignature != null) j[_keyKey] = keySignature;
     if (timeSignature != null) j[_tsKey] = timeSignature!.vex;
     if (barline != null && !barline!.isDefault) j[_barKey] = barline!.id;
+    if (repeat != null) j[_repeatKey] = repeat!.id;
     return j;
   }
 
@@ -671,6 +708,7 @@ class Measure {
     String? keySignature;
     TimeSignature? timeSignature;
     BarlineType? barline;
+    RepeatMark? repeat;
     for (final entry in j.entries) {
       if (entry.key == _dynKey) {
         final m = entry.value as Map<String, dynamic>;
@@ -695,6 +733,10 @@ class Measure {
         barline = BarlineType.fromId(entry.value as String?);
         continue;
       }
+      if (entry.key == _repeatKey) {
+        repeat = RepeatMark.fromId(entry.value as String?);
+        continue;
+      }
       voices[entry.key] = (entry.value as List)
           .map((e) => MusicNote.fromJson(e as Map<String, dynamic>))
           .toList();
@@ -703,7 +745,8 @@ class Measure {
         dynamics: dynamics,
         keySignature: keySignature,
         timeSignature: timeSignature,
-        barline: barline);
+        barline: barline,
+        repeat: repeat);
   }
 }
 
