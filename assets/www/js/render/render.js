@@ -13,6 +13,7 @@ import { drawSelectionHighlight, keepCursorInView, attachTapListener } from './g
 import { effectiveKeys, cancelKeyFor } from '../domain/keysig.js';
 import { effectiveTimeSignatures } from '../domain/timesig.js';
 import { effectiveBarlines } from '../domain/barlines.js';
+import { effectiveRepeatBarlines } from '../domain/repeats.js';
 import { setupBarline, drawCustomBarline, setupGrandBarline, drawGrandBarline } from './barlines.js';
 import { Playback } from '../playback/scheduler.js';
 
@@ -100,7 +101,7 @@ export function render(score, forcedWidth) {
     // domain/barlines. Нативные типы ставятся на стан до отрисовки, кастартные
     // (dashed/dotted/tick/short) дорисовываются после — общим со страничной
     // печатью кодом (render/barlines), поэтому экран и PDF совпадают.
-    const bars = effectiveBarlines(measures);
+    const bars = effectiveRepeatBarlines(measures, effectiveBarlines(measures));
 
     // Реальная ширина «головы» стана по ФАКТИЧЕСКИМ начальным модификаторам
     // (ключ [+ тональность с бекарами-отменой] [+ размер]), через getNoteStartX

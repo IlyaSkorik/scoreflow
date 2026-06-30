@@ -56,6 +56,10 @@ export function setupGrandBarline(VF, topStave, bottomStave) {
 // короткими у верхнего стана (короткие по определению). Вызывать ПОСЛЕ draw.
 export function drawGrandBarline(VF, ctx, topStave, bottomStave, id) {
     const spec = barlineSpec(id);
+    if (id === 'repeatStart' || id === 'repeatEnd' || id === 'repeatBoth') {
+        drawGrandRepeat(ctx, topStave, bottomStave, id);
+        return;
+    }
     if (spec.native) {
         const connName = GRAND_CONNECTOR[spec.native];
         if (!connName) return; // невидимая / неизвестный — линии нет
@@ -83,6 +87,58 @@ export function drawGrandBarline(VF, ctx, topStave, bottomStave, id) {
             strokeVertical(ctx, x, topStave.getYForLine(1),
                 topStave.getYForLine(3), null);
             break;
+    }
+}
+
+function drawGrandRepeat(ctx, topStave, bottomStave, id) {
+    const x = topStave.getX() + topStave.getWidth();
+    const yTop = topStave.getYForLine(0);
+    const yBot = bottomStave.getYForLine(4);
+    const space = topStave.getYForLine(1) - yTop;
+    const thin = 1.2, thick = 3.2, gap = 4.0;
+
+    function line(xx, w) {
+        ctx.save();
+        ctx.setLineWidth(w);
+        if (ctx.setStrokeStyle) ctx.setStrokeStyle(COLOR);
+        ctx.beginPath();
+        ctx.moveTo(xx, yTop);
+        ctx.lineTo(xx, yBot);
+        ctx.stroke();
+        ctx.restore();
+    }
+    function dotPair(stave, xx) {
+        const r = 1.8;
+        const ys = [stave.getYForLine(1.5), stave.getYForLine(2.5)];
+        ctx.save();
+        if (ctx.setFillStyle) ctx.setFillStyle(COLOR);
+        for (let i = 0; i < ys.length; i++) {
+            ctx.beginPath();
+            if (ctx.arc) ctx.arc(xx, ys[i], r, 0, Math.PI * 2);
+            else ctx.rect(xx - r, ys[i] - r, r * 2, r * 2);
+            ctx.fill();
+        }
+        ctx.restore();
+    }
+    function dots(xx) {
+        dotPair(topStave, xx);
+        dotPair(bottomStave, xx);
+    }
+
+    if (id === 'repeatStart') {
+        line(x - gap, thin);
+        line(x, thick);
+        dots(x + gap);
+    } else if (id === 'repeatEnd') {
+        dots(x - gap * 2);
+        line(x - gap, thin);
+        line(x, thick);
+    } else {
+        dots(x - gap * 2.5);
+        line(x - gap, thin);
+        line(x, thick);
+        line(x + gap, thin);
+        dots(x + gap * 2.5);
     }
 }
 

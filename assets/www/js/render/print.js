@@ -17,6 +17,7 @@ import { voiceListOf, nextRealNote, sameKeys } from '../domain/notes.js';
 import { effectiveKeys, cancelKeyFor } from '../domain/keysig.js';
 import { effectiveTimeSignatures } from '../domain/timesig.js';
 import { effectiveBarlines } from '../domain/barlines.js';
+import { effectiveRepeatBarlines } from '../domain/repeats.js';
 import { setupBarline, drawCustomBarline, drawGrandBarline } from './barlines.js';
 import { drawDynamic } from './dynamics.js';
 import { dynamicsBaseline } from './dynamics_layout.js';
@@ -280,7 +281,7 @@ export function renderPrintPages(score) {
     const tsStr = effTs.map(function (t) { return t.beats + '/' + t.beatValue; });
     // Тип тактовой черты (правой границы) КАЖДОГО такта — единое разрешение из
     // domain/barlines (та же логика, что на экране).
-    const bars = effectiveBarlines(measures);
+    const bars = effectiveRepeatBarlines(measures, effectiveBarlines(measures));
     if (measures.length === 0) return 0;
     // Смена тональности / размера на такте i>0 (для ширины и отрисовки в
     // середине системы). Размер на такте 0 — голова первой системы.
