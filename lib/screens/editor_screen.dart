@@ -1679,12 +1679,29 @@ class _EditorScreenState extends State<EditorScreen> {
       appBar: AppBar(
         title: GestureDetector(
           onTap: _rename,
-          child: Row(
+          child: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Flexible(child: Text(score.title, overflow: TextOverflow.ellipsis)),
-              const SizedBox(width: 6),
-              const Icon(Icons.edit, size: 16),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                      child:
+                          Text(score.title, overflow: TextOverflow.ellipsis)),
+                  const SizedBox(width: 6),
+                  const Icon(Icons.edit, size: 16),
+                ],
+              ),
+              // Номер такта под курсором переехал сюда из панели ввода:
+              // информация видна всегда, но не занимает отдельную строку в
+              // рабочей зоне (больше места партитуре).
+              Text(
+                'Такт ${_cursor.measure + 1}/${score.measures.length}',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+              ),
             ],
           ),
         ),
@@ -1759,7 +1776,11 @@ class _EditorScreenState extends State<EditorScreen> {
               ),
             ),
           ),
-          _EditorPanel(
+          // Во время воспроизведения панель ввода скрывается — партитура и
+          // транспорт получают весь экран (следование за плейхедом читается
+          // лучше). По остановке (_isPlaying=false) панель возвращается.
+          if (!_isPlaying)
+            _EditorPanel(
             score: score,
             cursor: _cursor,
             duration: _duration,
