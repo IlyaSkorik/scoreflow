@@ -54,6 +54,15 @@ const Map<RepeatMark?, String> _repeatLabels = {
   RepeatMark.both: 'Обе :|:',
 };
 
+/// Вольты редактора: номер концовки -> подпись. Однотактовые концовки 1./2.
+/// (span=1) — типовой выбор; модель/движок поддерживают и многотактовые/
+/// произвольные списки, но UI держит простой профессиональный набор.
+const Map<int?, String> _voltaLabels = {
+  null: 'Нет',
+  1: '1-я концовка',
+  2: '2-я концовка',
+};
+
 /// Редактор партитуры: WebView-рендер (VexFlow) + панель ввода нот + плеер.
 class EditorScreen extends StatefulWidget {
   final String scoreId;
@@ -238,6 +247,7 @@ class _EditorScreenState extends State<EditorScreen> {
     final tsByIndex = s.measures.map((m) => m.timeSignature).toList();
     final barByIndex = s.measures.map((m) => m.barline).toList();
     final repeatByIndex = s.measures.map((m) => m.repeat).toList();
+    final voltaByIndex = s.measures.map((m) => m.volta).toList();
 
     // ДЕЙСТВУЮЩИЙ размер такта по индексу — ЕДИНЫЙ источник ёмкости. Смены
     // размера позиционны (по индексу), поэтому одна функция описывает и старую,
@@ -284,6 +294,7 @@ class _EditorScreenState extends State<EditorScreen> {
         timeSignature: i < tsByIndex.length ? tsByIndex[i] : null,
         barline: i < barByIndex.length ? barByIndex[i] : null,
         repeat: i < repeatByIndex.length ? repeatByIndex[i] : null,
+        volta: i < voltaByIndex.length ? voltaByIndex[i] : null,
       ));
     }
 
@@ -1058,6 +1069,21 @@ class _EditorScreenState extends State<EditorScreen> {
     });
   }
 
+  /// Инструмент «Вольта» — установка/замена/снятие концовки, НАЧИНАющейся с
+  /// текущего такта. [number]==null — снять вольту; иначе поставить однотактовую
+  /// концовку с этим номером ([Volta.ending]). Вольта — FIRST-CLASS объект-спан,
+  /// хранится отдельно от `_repeat`: renderer рисует скобку над станом, playback
+  /// compiler (domain/voltas + repeats) выбирает концовку по проходу повтора,
+  /// scheduler остаётся простым. Идёт через обычный пайплайн (_commit ->
+  /// normalize -> render -> persist -> Undo/Redo), переживает reflow позиционно.
+  void _setMeasureVolta(int? number) {
+    final m = _cursor.measure;
+    _commit(() {
+      _score!.measures[m].volta =
+          number == null ? null : Volta.ending(number);
+    });
+  }
+
   /// Нижний лист «Ещё» — редкие действия вне рабочей зоны: точный темп,
   /// sustain (фортепиано), параметры партитуры (тональность/размер),
   /// добавление такта, переименование, экспорт PDF.
@@ -1264,6 +1290,33 @@ class _EditorScreenState extends State<EditorScreen> {
                       ],
                       onChanged: (v) {
                         _setMeasureRepeat(v);
+                        setSheet(() {});
+                      },
+                    ),
+                  );
+                }),
+                // Вольта (концовка) — контекстно к ТАКТУ под курсором: 1-я/2-я
+                // концовка НАЧИНАется с этого такта. Нотационный объект-спан над
+                // станом; интегрирован с повтором (playback выбирает концовку по
+                // проходу). Смена немедленно перерендерит экран/PDF, попадёт в
+                // Undo/Redo и автосейв. Доступно обоим инструментам.
+                Builder(builder: (ctx) {
+                  final m = _cursor.measure;
+                  final n = score.measures[m].volta?.numbers.first;
+                  final cur = (n == 1 || n == 2) ? n : null;
+                  return ListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                    leading: const Icon(Icons.repeat_one),
+                    title: Text('Вольта (такт ${m + 1})'),
+                    trailing: DropdownButton<int?>(
+                      value: cur,
+                      items: [
+                        for (final entry in _voltaLabels.entries)
+                          DropdownMenuItem<int?>(
+                              value: entry.key, child: Text(entry.value)),
+                      ],
+                      onChanged: (v) {
+                        _setMeasureVolta(v);
                         setSheet(() {});
                       },
                     ),
