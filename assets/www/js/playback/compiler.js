@@ -6,7 +6,7 @@ import { tupletScaleOf } from '../domain/tuplets.js';
 import { sameKeys } from '../domain/notes.js';
 import { resolveMidi } from '../domain/pitch.js';
 import { keySignatureAlterations, effectiveKeys } from '../domain/keysig.js';
-import { dynamicsTimeline, velocityAt } from '../domain/dynamics.js';
+import { velocityTimeline, velocityAt } from '../domain/dynamics.js';
 import {
     effectiveTimeSignatures, measureCapacityQ, measureStarts, metronomeClicks,
 } from '../domain/timesig.js';
@@ -102,14 +102,15 @@ export function compilePlayback(payload) {
     // Альтерации (ступень -> сдвиг) пересчитываются на границе такта, поэтому
     // playback переключается ровно на такте смены. Для ударных высота не нужна.
     const effKeys = isDrums ? [] : effectiveKeys(measures, payload.keySignature || 'C');
-    // Громкость каждого события РАЗРЕШАЕТСЯ ОДИН РАЗ из динамических оттенков:
-    // на голос строим таймлайн оттенков (абсолютные четверти -> velocity), и
-    // каждому событию ставим активную громкость на его startBeat. AudioEngine
-    // получает готовый velocity — без повторных расчётов и без оттенков на ноте.
-    // Старты тактов разные при сменах размера, поэтому таймлайн строим по starts.
+    // Громкость каждого события РАЗРЕШАЕТСЯ ОДИН РАЗ: на голос строим velocity-
+    // таймлайн (ступенчатые оттенки + ramp-сегменты вилок cresc./dim.), и каждому
+    // событию ставим velocityAt на его startBeat — ВНУТРИ вилки это ИНТЕРПОЛЯЦИЯ,
+    // иначе ступенька. AudioEngine получает готовый velocity, без повторных
+    // расчётов и без вилок/оттенков на ноте. Таймлайн строим по ЛИНЕЙНЫМ starts
+    // (до repeat/volta-разворота): развёрнутые события наследуют velocity головы.
     const timelines = {};
     for (let vi = 0; vi < voiceIds.length; vi++) {
-        timelines[voiceIds[vi]] = dynamicsTimeline(measures, voiceIds[vi], starts);
+        timelines[voiceIds[vi]] = velocityTimeline(measures, voiceIds[vi], starts);
     }
     let events = [];
 
