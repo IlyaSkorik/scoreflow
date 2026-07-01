@@ -574,6 +574,37 @@ class Pitch {
   int get hashCode => Object.hash(step, octave, accidental, head);
 }
 
+/// Артикуляция ноты (staccato/accent/…) — FIRST-CLASS выразительный знак,
+/// принадлежащий НОТЕ (головке), НЕ такту. Как в MuseScore/Dorico/Finale.
+/// Хранится в списке на [MusicNote] (несколько артикуляций на ноте: staccato +
+/// accent и т.п.) — поэтому переживает reflow «бесплатно» вместе с объектом ноты.
+///
+/// Влияние на playback (длительность/громкость/атака) считается в ОДНОМ месте —
+/// движке (domain/articulations.ARTICULATION_SPEC), как громкость у [DynamicMark]:
+/// компилятор — последний выразительный слой ПОСЛЕ динамики и вилок, scheduler не
+/// знает об артикуляциях. Здесь хранится лишь ЧТО записано.
+///
+/// Расширяемо БЕЗ редизайна: fermata/breath/caesura — добавление значений
+/// (+ запись в движковый ARTICULATION_SPEC), без переделки ноты/рендера/редактора.
+enum Articulation {
+  staccato,
+  staccatissimo,
+  accent,
+  marcato,
+  tenuto;
+
+  String get id => name;
+
+  static Articulation? fromId(String? id) => switch (id) {
+        'staccato' => Articulation.staccato,
+        'staccatissimo' => Articulation.staccatissimo,
+        'accent' => Articulation.accent,
+        'marcato' => Articulation.marcato,
+        'tenuto' => Articulation.tenuto,
+        _ => null,
+      };
+}
+
 /// Одна нота / аккорд / пауза.
 ///
 /// [pitches] — головки ноты как модель [Pitch] (ступень + октава + знак
@@ -617,6 +648,12 @@ class MusicNote {
   Tuplet? tuplet;
   bool tupletStart;
 
+  /// Артикуляции ноты (staccato/accent/…). Список — на ноте может быть несколько
+  /// совместимых знаков (staccato + accent). Принадлежат НОТЕ, поэтому едут с ней
+  /// при reflow (как [tieToNext]/[slurStart]). Влияние на playback считает движок
+  /// (единое место). Пустой список — знаков нет (не сериализуется).
+  List<Articulation> articulations;
+
   MusicNote({
     required this.pitches,
     required this.duration,
@@ -628,7 +665,8 @@ class MusicNote {
     this.slurStop = false,
     this.tuplet,
     this.tupletStart = false,
-  });
+    List<Articulation>? articulations,
+  }) : articulations = articulations ?? [];
 
   /// Множитель реального времени ноты от tuplet-группы (1.0 вне группы).
   double get tupletScale => tuplet?.scale ?? 1.0;
@@ -653,6 +691,7 @@ class MusicNote {
     bool slurStop = false,
     Tuplet? tuplet,
     bool tupletStart = false,
+    List<Articulation>? articulations,
   }) =>
       MusicNote(
         pitches: keys.map(Pitch.fromVexKey).toList(),
@@ -665,6 +704,7 @@ class MusicNote {
         slurStop: slurStop,
         tuplet: tuplet,
         tupletStart: tupletStart,
+        articulations: articulations,
       );
 
   MusicNote copy() => MusicNote(
@@ -680,6 +720,7 @@ class MusicNote {
             ? null
             : Tuplet(tuplet!.actualNotes, tuplet!.normalNotes),
         tupletStart: tupletStart,
+        articulations: List<Articulation>.of(articulations),
       );
 
   /// Поля, общие для persistence-JSON и render-проекции (всё, кроме головок).
@@ -693,6 +734,10 @@ class MusicNote {
         if (slurStop) 'slurStop': true,
         if (tuplet != null) 'tuplet': tuplet!.toJson(),
         if (tupletStart) 'tupletStart': true,
+        // Артикуляции — списком id (`art`), только когда есть. И persistence, и
+        // render-проекция читают одно поле (движок берёт глиф/эффект по id).
+        if (articulations.isNotEmpty)
+          'art': articulations.map((a) => a.id).toList(),
       };
 
   /// Persistence-JSON: головки как структурные [Pitch] (round-trip знаков).
@@ -728,6 +773,12 @@ class MusicNote {
             ? null
             : Tuplet.fromJson(j['tuplet'] as Map<String, dynamic>),
         tupletStart: j['tupletStart'] as bool? ?? false,
+        // Артикуляции: список id под `art` (старые файлы без него грузятся).
+        // Неизвестные id отбрасываются (Articulation.fromId -> null).
+        articulations: (j['art'] as List?)
+            ?.map((e) => Articulation.fromId(e as String?))
+            .whereType<Articulation>()
+            .toList(),
       );
 }
 
