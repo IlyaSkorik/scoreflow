@@ -476,6 +476,60 @@ class Volta {
   int get hashCode => Object.hash(span, Object.hashAll(numbers));
 }
 
+/// Навигационный символ (Segno / Coda / D.C. / D.S. / Fine / To Coda …) —
+/// FIRST-CLASS нотационный объект, определяющий ПОРЯДОК воспроизведения. Это НЕ
+/// тактовая черта ([BarlineType]) и НЕ реприза ([RepeatMark]) — отдельный слой,
+/// как в MuseScore/Dorico/Finale. Позиционный якорь по НОМЕРУ такта (переживает
+/// reflow, как `_bar`/`_repeat`/`_volta`). Хранится под ключом `_nav`.
+///
+/// РАЗВОРОТ порядка воспроизведения делает ТОЛЬКО движок (domain/navigation
+/// поверх repeat/volta-разворота — единый источник), scheduler о навигации не
+/// знает. Метки делятся на ЯКОРЯ ([segno]/[coda] — цели переходов, [toCoda]/
+/// [fine] — точки на возвратном проходе) и ПЕРЕХОДЫ (D.C./D.S. и их al Fine/al
+/// Coda варианты). Future-ready: несколько Segno/Coda (на разных тактах),
+/// репетиционные буквы — соседние объекты/значения без переделки.
+enum NavigationMark {
+  segno,
+  coda,
+  toCoda,
+  fine,
+  daCapo,
+  daCapoAlFine,
+  daCapoAlCoda,
+  dalSegno,
+  dalSegnoAlFine,
+  dalSegnoAlCoda;
+
+  String get id => name;
+
+  /// Метка-ПЕРЕХОД (D.C./D.S.*), инициирующая прыжок на возвратном проходе.
+  /// Якоря (segno/coda/toCoda/fine) — false.
+  bool get isJump => switch (this) {
+        NavigationMark.daCapo ||
+        NavigationMark.daCapoAlFine ||
+        NavigationMark.daCapoAlCoda ||
+        NavigationMark.dalSegno ||
+        NavigationMark.dalSegnoAlFine ||
+        NavigationMark.dalSegnoAlCoda =>
+          true,
+        _ => false,
+      };
+
+  static NavigationMark? fromId(String? id) => switch (id) {
+        'segno' => NavigationMark.segno,
+        'coda' => NavigationMark.coda,
+        'toCoda' => NavigationMark.toCoda,
+        'fine' => NavigationMark.fine,
+        'daCapo' => NavigationMark.daCapo,
+        'daCapoAlFine' => NavigationMark.daCapoAlFine,
+        'daCapoAlCoda' => NavigationMark.daCapoAlCoda,
+        'dalSegno' => NavigationMark.dalSegno,
+        'dalSegnoAlFine' => NavigationMark.dalSegnoAlFine,
+        'dalSegnoAlCoda' => NavigationMark.dalSegnoAlCoda,
+        _ => null,
+      };
+}
+
 /// Знак альтерации головки ноты. ОТДЕЛЬНАЯ модель (не bool) — как в MuseScore/
 /// Dorico/Finale. Архитектура расширяема до микротонов/четвертьтонов простым
 /// добавлением значений: каждое значение само знает свой сдвиг в полутонах и
@@ -899,6 +953,12 @@ class Measure {
   /// (reflowTempos) — ПАРАЛЛЕЛЬНО оттенкам/вилкам. Хранятся под ключом `_tempo`.
   final List<TempoMark> tempos;
 
+  /// Навигационный символ на этом такте (Segno/Coda/D.C./D.S./Fine/To Coda) или
+  /// null. Отдельный слой от `_bar`/`_repeat`: renderer рисует символ над станом,
+  /// playback-компилятор (domain/navigation) разворачивает порядок. Позиционный
+  /// якорь по номеру такта. Хранится под ключом `_nav`.
+  NavigationMark? navigation;
+
   static const String _dynKey = '_dyn';
   static const String _keyKey = '_key';
   static const String _tsKey = '_ts';
@@ -907,6 +967,7 @@ class Measure {
   static const String _voltaKey = '_volta';
   static const String _hairKey = '_hair';
   static const String _tempoKey = '_tempo';
+  static const String _navKey = '_nav';
 
   Measure(this.voices,
       {Map<String, List<Dynamic>>? dynamics,
@@ -916,7 +977,8 @@ class Measure {
       this.timeSignature,
       this.barline,
       this.repeat,
-      this.volta})
+      this.volta,
+      this.navigation})
       : dynamics = dynamics ?? {},
         hairpins = hairpins ?? [],
         tempos = tempos ?? [];
@@ -950,6 +1012,7 @@ class Measure {
         volta: volta?.copy(),
         hairpins: hairpins.map((h) => h.copy()).toList(),
         tempos: tempos.map((t) => t.copy()).toList(),
+        navigation: navigation,
       );
 
   /// JSON оттенков по голосам (только непустые списки) — общий для persistence
@@ -978,6 +1041,7 @@ class Measure {
     if (tempos.isNotEmpty) {
       j[_tempoKey] = tempos.map((t) => t.toJson()).toList();
     }
+    if (navigation != null) j[_navKey] = navigation!.id;
     return j;
   }
 
@@ -1005,6 +1069,7 @@ class Measure {
     if (tempos.isNotEmpty) {
       j[_tempoKey] = tempos.map((t) => t.toRenderJson()).toList();
     }
+    if (navigation != null) j[_navKey] = navigation!.id;
     return j;
   }
 
@@ -1013,6 +1078,7 @@ class Measure {
     final dynamics = <String, List<Dynamic>>{};
     final hairpins = <Hairpin>[];
     final tempos = <TempoMark>[];
+    NavigationMark? navigation;
     String? keySignature;
     TimeSignature? timeSignature;
     BarlineType? barline;
@@ -1063,6 +1129,10 @@ class Measure {
         }
         continue;
       }
+      if (entry.key == _navKey) {
+        navigation = NavigationMark.fromId(entry.value as String?);
+        continue;
+      }
       voices[entry.key] = (entry.value as List)
           .map((e) => MusicNote.fromJson(e as Map<String, dynamic>))
           .toList();
@@ -1075,7 +1145,8 @@ class Measure {
         timeSignature: timeSignature,
         barline: barline,
         repeat: repeat,
-        volta: volta);
+        volta: volta,
+        navigation: navigation);
   }
 }
 
