@@ -271,6 +271,57 @@ class Hairpin {
   int get hashCode => Object.hash(type, voice, startBeat, endMeasure, endBeat);
 }
 
+/// Смена темпа (♩ = N) — FIRST-CLASS нотационный объект на ритмической позиции
+/// (такт+доля), НЕ свойство ноты. Как в MuseScore/Dorico/Finale. Привязана к
+/// музыкальному ВРЕМЕНИ и переживает reflow перепривязкой по абсолютной доле
+/// (reflowTempos) — ПАРАЛЛЕЛЬНО оттенкам/вилкам.
+///
+/// Темп в ПЛЕЙБЕК-ВРЕМЯ превращает ТОЛЬКО движок (domain/tempo.buildTempoMap +
+/// компилятор — единый tempo map): здесь хранится лишь ЧТО записано. [bpm] —
+/// ударов в минуту; [beatUnit] — доля-удар в ЧЕТВЕРТЯХ (1 = ♩ по умолчанию;
+/// расширяемо на ♩.=1.5, ♪=0.5 и т.п.). [beat] — доля (в четвертях) от начала
+/// такта ([measure] задаёт контейнер). Future-ready: rit./accel./a tempo/tempo
+/// text — соседние объекты/поля с тем же якорем, без переделки модели.
+class TempoMark {
+  final int bpm;
+  final double beatUnit;
+  final double beat;
+
+  const TempoMark({required this.bpm, this.beatUnit = 1, this.beat = 0});
+
+  TempoMark copy() => TempoMark(bpm: bpm, beatUnit: beatUnit, beat: beat);
+
+  /// Тот же якорь с другим bpm (замена темпа на месте).
+  TempoMark withBpm(int v) => TempoMark(bpm: v, beatUnit: beatUnit, beat: beat);
+
+  /// Persistence-JSON и render-проекция СОВПАДАЮТ (движок читает bpm/beat/unit).
+  /// [beat] задаётся контейнером-тактом косвенно, но хранится (позиция внутри
+  /// такта); [measure] — нет (это индекс в списке тактов). unit пишем только != 1.
+  Map<String, dynamic> toJson() => {
+        'bpm': bpm,
+        'beat': beat,
+        if (beatUnit != 1) 'unit': beatUnit,
+      };
+
+  Map<String, dynamic> toRenderJson() => toJson();
+
+  factory TempoMark.fromJson(Map<String, dynamic> j) => TempoMark(
+        bpm: j['bpm'] as int? ?? 120,
+        beatUnit: (j['unit'] as num?)?.toDouble() ?? 1,
+        beat: (j['beat'] as num?)?.toDouble() ?? 0,
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      other is TempoMark &&
+      other.bpm == bpm &&
+      other.beatUnit == beatUnit &&
+      (other.beat - beat).abs() < 1e-9;
+
+  @override
+  int get hashCode => Object.hash(bpm, beatUnit, beat);
+}
+
 /// Тип тактовой черты (barline) — ОТДЕЛЬНАЯ модель и FIRST-CLASS нотационный
 /// объект, как в MuseScore/Dorico/Finale. НЕ свойство рендера: черта привязана к
 /// ГРАНИЦЕ такта (его ПРАВОМУ краю — end barline) и переживает reflow как
@@ -843,6 +894,11 @@ class Measure {
   /// зарезервированным ключом `_hair`.
   final List<Hairpin> hairpins;
 
+  /// Смены темпа (♩ = N) на ритмических позициях внутри такта. Привязаны к
+  /// музыкальному времени и переживают reflow перепривязкой по абсолютной доле
+  /// (reflowTempos) — ПАРАЛЛЕЛЬНО оттенкам/вилкам. Хранятся под ключом `_tempo`.
+  final List<TempoMark> tempos;
+
   static const String _dynKey = '_dyn';
   static const String _keyKey = '_key';
   static const String _tsKey = '_ts';
@@ -850,17 +906,20 @@ class Measure {
   static const String _repeatKey = '_repeat';
   static const String _voltaKey = '_volta';
   static const String _hairKey = '_hair';
+  static const String _tempoKey = '_tempo';
 
   Measure(this.voices,
       {Map<String, List<Dynamic>>? dynamics,
       List<Hairpin>? hairpins,
+      List<TempoMark>? tempos,
       this.keySignature,
       this.timeSignature,
       this.barline,
       this.repeat,
       this.volta})
       : dynamics = dynamics ?? {},
-        hairpins = hairpins ?? [];
+        hairpins = hairpins ?? [],
+        tempos = tempos ?? [];
 
   factory Measure.empty(InstrumentType instrument) => Measure({
         for (final v in instrument.voiceIds) v: <MusicNote>[],
@@ -890,6 +949,7 @@ class Measure {
         repeat: repeat,
         volta: volta?.copy(),
         hairpins: hairpins.map((h) => h.copy()).toList(),
+        tempos: tempos.map((t) => t.copy()).toList(),
       );
 
   /// JSON оттенков по голосам (только непустые списки) — общий для persistence
@@ -915,6 +975,9 @@ class Measure {
     if (hairpins.isNotEmpty) {
       j[_hairKey] = hairpins.map((h) => h.toJson()).toList();
     }
+    if (tempos.isNotEmpty) {
+      j[_tempoKey] = tempos.map((t) => t.toJson()).toList();
+    }
     return j;
   }
 
@@ -939,6 +1002,9 @@ class Measure {
     if (hairpins.isNotEmpty) {
       j[_hairKey] = hairpins.map((h) => h.toRenderJson()).toList();
     }
+    if (tempos.isNotEmpty) {
+      j[_tempoKey] = tempos.map((t) => t.toRenderJson()).toList();
+    }
     return j;
   }
 
@@ -946,6 +1012,7 @@ class Measure {
     final voices = <String, List<MusicNote>>{};
     final dynamics = <String, List<Dynamic>>{};
     final hairpins = <Hairpin>[];
+    final tempos = <TempoMark>[];
     String? keySignature;
     TimeSignature? timeSignature;
     BarlineType? barline;
@@ -990,6 +1057,12 @@ class Measure {
         }
         continue;
       }
+      if (entry.key == _tempoKey) {
+        for (final e in (entry.value as List)) {
+          tempos.add(TempoMark.fromJson(e as Map<String, dynamic>));
+        }
+        continue;
+      }
       voices[entry.key] = (entry.value as List)
           .map((e) => MusicNote.fromJson(e as Map<String, dynamic>))
           .toList();
@@ -997,6 +1070,7 @@ class Measure {
     return Measure(voices,
         dynamics: dynamics,
         hairpins: hairpins,
+        tempos: tempos,
         keySignature: keySignature,
         timeSignature: timeSignature,
         barline: barline,
