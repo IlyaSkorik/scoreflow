@@ -172,16 +172,36 @@ Your scores always remain on your device.
 
 ---
 
-# 📄 Export
+# 📄 Export — Print Layout Engine
 
-ScoreFlow supports professional page layout for printing.
+ScoreFlow ships a dedicated print layout engine (`assets/www/js/print/`):
 
-Current capabilities:
+```text
+Score → Print Layout Engine → Page Layout → PDF
+```
 
-* A4 page layout
-* Automatic system justification
-* High-quality SVG rendering
-* PDF export via the system print dialog
+Print is a separate product from the editor — it is laid out **for paper**,
+never scaled from the screen:
+
+* **Paper-first geometry** — everything is computed from the physical page
+  (A4, millimetre margins) and a publishing engraving size (7 mm staff),
+  applied through a single SVG `viewBox` transform.
+* **Optimal system breaking** — measures are distributed across systems by
+  a TeX-style dynamic programming minimiser (4/4/4 instead of a greedy
+  5/5/2), with both-margin justification and a non-stretched final system.
+* **Content-driven vertical layout** — each system's height is derived from
+  its own notation (ledger lines, stems, dynamics, hairpins, voltas, tempo
+  and navigation marks), so nothing collides and quiet systems stay compact.
+* **Intelligent page breaking** — systems are packed onto pages by a second
+  DP pass that avoids orphan systems and balances page fill.
+* **Professional title block & footer** — centred title/subtitle, composer
+  and arranger credits, page numbers.
+* **Shared engraving** — the same drawing layers as the screen (barlines,
+  voltas, tempo, navigation, dynamics, hairpins, ties/slurs); only the
+  layout differs. PDF export goes through the system print dialog.
+
+The page model is deterministic and lives in the DOM (`#print-root`), which
+keeps the architecture ready for a future in-app Page View.
 
 ---
 

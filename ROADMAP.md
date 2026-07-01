@@ -295,6 +295,15 @@ Secondary goals:
 * [x] Shared engraving algorithms
 * [x] Dynamics collision avoidance
 * [x] Shared screen/PDF dynamics placement
+* [x] Print Layout Engine (`js/print/`)
+
+  * Paper-first geometry: A4 from millimetres, publishing engraving scale (7 mm staff) via single SVG viewBox
+  * Optimal system breaking (TeX-style DP badness minimiser: 4/4/4 instead of greedy 5/5/2)
+  * Content-driven vertical profiles per system (model-based note extents, dynamics/hairpin reserves, top-mark stacking above ledger lines)
+  * Intelligent page breaking (DP, orphan avoidance, title-block-aware first page)
+  * Professional title block (title / subtitle / composer / arranger) and page-number footer
+  * Print pipeline independent from editor state; deterministic single pass
+  * Node unit tests (`test/js/print_layout.test.mjs`) + visual print harness (`test/print/`)
 
 ---
 
