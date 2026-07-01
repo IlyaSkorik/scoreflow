@@ -1382,8 +1382,17 @@ class _EditorScreenState extends State<EditorScreen> {
       // Контента много (структура такта + воспроизведение + действия) — снимаем
       // потолок высоты и делаем содержимое прокручиваемым.
       isScrollControlled: true,
+      // Лист высокий (75% экрана) — стандартные ~250 мс ощущаются рывком.
+      // Открытие замедлено, закрытие чуть быстрее (уход глаз не провожает).
+      sheetAnimationStyle: const AnimationStyle(
+        duration: Duration(milliseconds: 400),
+        reverseDuration: Duration(milliseconds: 300),
+      ),
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setSheet) {
+          // DraggableScrollableSheet связывает жест прокрутки с высотой листа:
+          // когда контент у верха, свайп вниз тянет лист и закрывает его
+          // (иначе жест целиком съедал бы внутренний скролл).
           final m = _cursor.measure;
           final atStart = m == 0;
 
@@ -1436,189 +1445,202 @@ class _EditorScreenState extends State<EditorScreen> {
           final isCustomTempo =
               curTempo != null && !tempoPresets.contains(curTempo);
 
-          return SafeArea(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
-                    child: Text(
-                      'Такт ${m + 1}',
-                      style: Theme.of(ctx).textTheme.titleMedium,
-                    ),
-                  ),
-
-                  // Тональность (фортепиано): такт 1 — начальная, дальше — смена
-                  // по месту. «Без смены» доступно только не в первом такте.
-                  if (isPiano)
-                    group(
-                      atStart
-                          ? 'Тональность'
-                          : 'Тональность · действует $effKey',
-                      [
-                        if (!atStart)
-                          chip('Без смены', ownKey == null, () {
-                            _setMeasureKey(null);
-                            setSheet(() {});
-                          }),
-                        for (final k in _keySignatures)
-                          chip(k, atStart ? effKey == k : ownKey == k, () {
-                            _setMeasureKey(k);
-                            setSheet(() {});
-                          }),
-                      ],
+          return DraggableScrollableSheet(
+            expand: false,
+            initialChildSize: 0.75,
+            minChildSize: 0.25,
+            maxChildSize: 0.95,
+            builder: (ctx, scroll) => SafeArea(
+              child: SingleChildScrollView(
+                controller: scroll,
+                padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
+                      child: Text(
+                        'Такт ${m + 1}',
+                        style: Theme.of(ctx).textTheme.titleMedium,
+                      ),
                     ),
 
-                  // Размер: пресеты + «Другой…» (или текущий нестандартный).
-                  group(atStart ? 'Размер' : 'Размер · действует $effTs', [
-                    if (!atStart)
-                      chip('Без смены', ownTs == null, () {
-                        _setMeasureTimeSignature(null);
-                        setSheet(() {});
-                      }),
-                    for (final t in _timeSignatures)
-                      chip(t, ownTs == t, () {
-                        _setMeasureTimeSignature(t);
-                        setSheet(() {});
-                      }),
-                    chip(isCustomTs ? ownTs : 'Другой…', isCustomTs, () async {
-                      final custom = await _pickCustomTimeSignature(
-                        score.effectiveTimeSignatureAt(m),
-                      );
-                      if (custom != null) _setMeasureTimeSignature(custom);
-                      setSheet(() {});
-                    }),
-                  ]),
+                    // Тональность (фортепиано): такт 1 — начальная, дальше — смена
+                    // по месту. «Без смены» доступно только не в первом такте.
+                    if (isPiano)
+                      group(
+                        atStart
+                            ? 'Тональность'
+                            : 'Тональность · действует $effKey',
+                        [
+                          if (!atStart)
+                            chip('Без смены', ownKey == null, () {
+                              _setMeasureKey(null);
+                              setSheet(() {});
+                            }),
+                          for (final k in _keySignatures)
+                            chip(k, atStart ? effKey == k : ownKey == k, () {
+                              _setMeasureKey(k);
+                              setSheet(() {});
+                            }),
+                        ],
+                      ),
 
-                  // Тактовая черта (правая граница такта).
-                  group('Тактовая черта', [
-                    for (final t in BarlineType.values)
-                      chip(_barlineLabels[t]!, curBar == t, () {
-                        _setMeasureBarline(t);
-                        setSheet(() {});
-                      }),
-                  ]),
+                    // Размер: пресеты + «Другой…» (или текущий нестандартный).
+                    group(atStart ? 'Размер' : 'Размер · действует $effTs', [
+                      if (!atStart)
+                        chip('Без смены', ownTs == null, () {
+                          _setMeasureTimeSignature(null);
+                          setSheet(() {});
+                        }),
+                      for (final t in _timeSignatures)
+                        chip(t, ownTs == t, () {
+                          _setMeasureTimeSignature(t);
+                          setSheet(() {});
+                        }),
+                      chip(
+                        isCustomTs ? ownTs : 'Другой…',
+                        isCustomTs,
+                        () async {
+                          final custom = await _pickCustomTimeSignature(
+                            score.effectiveTimeSignatureAt(m),
+                          );
+                          if (custom != null) _setMeasureTimeSignature(custom);
+                          setSheet(() {});
+                        },
+                      ),
+                    ]),
 
-                  // Повтор (реприза) на границе такта.
-                  group('Повтор', [
-                    for (final entry in _repeatLabels.entries)
-                      chip(entry.value, curRepeat == entry.key, () {
-                        _setMeasureRepeat(entry.key);
-                        setSheet(() {});
-                      }),
-                  ]),
+                    // Тактовая черта (правая граница такта).
+                    group('Тактовая черта', [
+                      for (final t in BarlineType.values)
+                        chip(_barlineLabels[t]!, curBar == t, () {
+                          _setMeasureBarline(t);
+                          setSheet(() {});
+                        }),
+                    ]),
 
-                  // Вольта (1-я/2-я концовка), начинается с этого такта.
-                  group('Вольта', [
-                    for (final entry in _voltaLabels.entries)
-                      chip(entry.value, curVolta == entry.key, () {
-                        _setMeasureVolta(entry.key);
-                        setSheet(() {});
-                      }),
-                  ]),
+                    // Повтор (реприза) на границе такта.
+                    group('Повтор', [
+                      for (final entry in _repeatLabels.entries)
+                        chip(entry.value, curRepeat == entry.key, () {
+                          _setMeasureRepeat(entry.key);
+                          setSheet(() {});
+                        }),
+                    ]),
 
-                  // Навигация (Segno/Coda/D.C./D.S./Fine/To Coda …).
-                  group('Навигация', [
-                    for (final entry in _navLabels.entries)
-                      chip(entry.value, curNav == entry.key, () {
-                        _setNavigation(entry.key);
-                        setSheet(() {});
-                      }),
-                  ]),
+                    // Вольта (1-я/2-я концовка), начинается с этого такта.
+                    group('Вольта', [
+                      for (final entry in _voltaLabels.entries)
+                        chip(entry.value, curVolta == entry.key, () {
+                          _setMeasureVolta(entry.key);
+                          setSheet(() {});
+                        }),
+                    ]),
 
-                  // Смена темпа (♩=) на позиции курсора. «Нет» — только не в
-                  // начале (начальный темп снять нельзя, он живёт в слайдере).
-                  group('Темп ♩=', [
-                    if (!atStart)
-                      chip('Нет', curTempo == null, () {
-                        _setTempoMark(null);
-                        setSheet(() {});
-                      }),
-                    for (final p in tempoPresets)
-                      chip('$p', curTempo == p, () {
-                        _setTempoMark(p);
-                        setSheet(() {});
-                      }),
-                    chip(
-                      isCustomTempo ? '$curTempo' : 'Другое…',
-                      isCustomTempo,
-                      () async {
-                        final custom = await _pickCustomBpm(curTempo ?? 120);
-                        if (custom != null) _setTempoMark(custom);
-                        setSheet(() {});
-                      },
+                    // Навигация (Segno/Coda/D.C./D.S./Fine/To Coda …).
+                    group('Навигация', [
+                      for (final entry in _navLabels.entries)
+                        chip(entry.value, curNav == entry.key, () {
+                          _setNavigation(entry.key);
+                          setSheet(() {});
+                        }),
+                    ]),
+
+                    // Смена темпа (♩=) на позиции курсора. «Нет» — только не в
+                    // начале (начальный темп снять нельзя, он живёт в слайдере).
+                    group('Темп ♩=', [
+                      if (!atStart)
+                        chip('Нет', curTempo == null, () {
+                          _setTempoMark(null);
+                          setSheet(() {});
+                        }),
+                      for (final p in tempoPresets)
+                        chip('$p', curTempo == p, () {
+                          _setTempoMark(p);
+                          setSheet(() {});
+                        }),
+                      chip(
+                        isCustomTempo ? '$curTempo' : 'Другое…',
+                        isCustomTempo,
+                        () async {
+                          final custom = await _pickCustomBpm(curTempo ?? 120);
+                          if (custom != null) _setTempoMark(custom);
+                          setSheet(() {});
+                        },
+                      ),
+                    ]),
+
+                    const Divider(height: 20),
+
+                    // Воспроизведение: начальный темп всей пьесы (слайдер точнее
+                    // чипов) и sustain (фортепиано).
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
+                      child: Text(
+                        'Воспроизведение',
+                        style: Theme.of(ctx).textTheme.titleSmall,
+                      ),
                     ),
-                  ]),
-
-                  const Divider(height: 20),
-
-                  // Воспроизведение: начальный темп всей пьесы (слайдер точнее
-                  // чипов) и sustain (фортепиано).
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
-                    child: Text(
-                      'Воспроизведение',
-                      style: Theme.of(ctx).textTheme.titleSmall,
-                    ),
-                  ),
-                  ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                    leading: const Icon(Icons.speed),
-                    title: const Text('Начальный темп'),
-                    trailing: Text(
-                      '${score.tempo} BPM',
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                  Slider(
-                    value: score.tempo.toDouble().clamp(40, 240),
-                    min: 40,
-                    max: 240,
-                    divisions: 200,
-                    label: '${score.tempo} BPM',
-                    onChanged: (v) {
-                      _setTempo(v.round());
-                      setSheet(() {});
-                    },
-                  ),
-                  if (isPiano)
-                    SwitchListTile(
+                    ListTile(
                       contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                      secondary: const Icon(Icons.piano),
-                      title: const Text('Демпфер-педаль (sustain)'),
-                      value: _sustain,
-                      onChanged: (_) {
-                        _toggleSustain();
+                      leading: const Icon(Icons.speed),
+                      title: const Text('Начальный темп'),
+                      trailing: Text(
+                        '${score.tempo} BPM',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    Slider(
+                      value: score.tempo.toDouble().clamp(40, 240),
+                      min: 40,
+                      max: 240,
+                      divisions: 200,
+                      label: '${score.tempo} BPM',
+                      onChanged: (v) {
+                        _setTempo(v.round());
                         setSheet(() {});
                       },
                     ),
+                    if (isPiano)
+                      SwitchListTile(
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                        ),
+                        secondary: const Icon(Icons.piano),
+                        title: const Text('Демпфер-педаль (sustain)'),
+                        value: _sustain,
+                        onChanged: (_) {
+                          _toggleSustain();
+                          setSheet(() {});
+                        },
+                      ),
 
-                  const Divider(height: 20),
+                    const Divider(height: 20),
 
-                  // Действия партитуры. «Переименовать» убрано — тап по заголовку
-                  // в AppBar делает то же (без дубля).
-                  ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                    leading: const Icon(Icons.playlist_add),
-                    title: const Text('Добавить такт'),
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      _addMeasure();
-                    },
-                  ),
-                  ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                    leading: const Icon(Icons.picture_as_pdf_outlined),
-                    title: const Text('Экспорт в PDF'),
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      _exportPdf();
-                    },
-                  ),
-                ],
+                    // Действия партитуры. «Переименовать» убрано — тап по заголовку
+                    // в AppBar делает то же (без дубля).
+                    ListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                      leading: const Icon(Icons.playlist_add),
+                      title: const Text('Добавить такт'),
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        _addMeasure();
+                      },
+                    ),
+                    ListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                      leading: const Icon(Icons.picture_as_pdf_outlined),
+                      title: const Text('Экспорт в PDF'),
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        _exportPdf();
+                      },
+                    ),
+                  ],
+                ),
               ),
             ),
           );
