@@ -31,7 +31,7 @@ export const Playback = {
     playing: false,
     comp: null,
     metronome: false,
-    secPerQuarter: 0.5,
+    baseTempo: 120,      // базовый темп (bpm) до первой смены `_tempo`
     startTime: 0,        // ctx.currentTime в момент beat 0
     lookahead: null,     // setInterval-«насос» упреждения
     raf: null,
@@ -46,12 +46,17 @@ export const Playback = {
     setMetronome: function (on) { this.metronome = !!on; },
     setFollowPlayback: function (on) { this.followPlayback = !!on; },
 
+    // Музыкальное время (доли) из абсолютного через tempo map компилятора —
+    // ЕДИНЫЙ конвертер (обратное преобразование сек->доли). Планировщик темп не
+    // считает, только читает готовое отображение.
     currentBeat: function () {
         const ctx = AudioEngine.ctx;
-        if (!ctx) return 0;
-        return (ctx.currentTime - this.startTime) / this.secPerQuarter;
+        if (!ctx || !this.comp) return 0;
+        return this.comp.tempoMap.beatAt(ctx.currentTime - this.startTime);
     },
-    secForBeat: function (q) { return this.startTime + q * this.secPerQuarter; },
+    secForBeat: function (q) {
+        return this.startTime + (this.comp ? this.comp.tempoMap.secAt(q) : q * 0.5);
+    },
 
     // Карта «музыкальное время -> X» для КАЖДОЙ строки Grand Staff.
     // Якоря берём из onset'ов ОБОИХ голосов (и пауз — у них тоже есть
@@ -123,7 +128,7 @@ export const Playback = {
     onRender: function () {
         if (!this.playing || !state.lastPayload) return;
         const curBeat = this.currentBeat();
-        this.comp = compilePlayback(state.lastPayload);
+        this.comp = compilePlayback(state.lastPayload, this.baseTempo);
         this._buildXMap();
         this.nextEvent = 0;
         while (this.nextEvent < this.comp.events.length &&
@@ -136,8 +141,11 @@ export const Playback = {
         if (!ctx) { showError('Web Audio недоступен в этом WebView.'); return; }
         AudioEngine.resume();
         this.stop(true); // сброс прежней сессии без снятия активности UI
-        this.secPerQuarter = 60 / (Number(tempo) || 120);
-        this.comp = compilePlayback(payload);
+        // Базовый темп (bpm) — из слайдера транспорта; смены `_tempo` в партитуре
+        // компилятор накладывает поверх. Абсолютное время события считает tempo map
+        // компилятора (единожды) — планировщик его лишь читает.
+        this.baseTempo = Number(tempo) || payload.tempo || 120;
+        this.comp = compilePlayback(payload, this.baseTempo);
         this._buildXMap();
         if (this.comp.events.length === 0) return;
         this.playing = true;
@@ -158,15 +166,17 @@ export const Playback = {
         const ev = this.comp.events;
 
         while (this.nextEvent < ev.length &&
-               this.secForBeat(ev[this.nextEvent].startBeat) < horizon) {
+               this.startTime + ev[this.nextEvent].startSec < horizon) {
             const e = ev[this.nextEvent];
-            const when = Math.max(ctx.currentTime, this.secForBeat(e.startBeat));
+            // Абсолютное время события уже посчитано компилятором (startSec/durSec
+            // из tempo map) — планировщик его не вычисляет.
+            const when = Math.max(ctx.currentTime, this.startTime + e.startSec);
             if (!e.rest && e.keys.length) {
                 if (this.comp.isDrums) {
                     for (let k = 0; k < e.keys.length; k++)
                         AudioEngine.playDrum(drumType(e.keys[k]), when, e.velocity);
                 } else {
-                    const durS = e.durationBeats * this.secPerQuarter;
+                    const durS = e.durSec;
                     // Высота уже разрешена компилятором (тональность + знак +
                     // правила такта) — играем готовые MIDI-номера головок.
                     const midis = e.midis || [];
@@ -183,9 +193,9 @@ export const Playback = {
         // логики здесь). Указатель двигаем всегда — звучит при включённом.
         const clicks = this.comp.clicks || [];
         while (this.nextClick < clicks.length &&
-               this.secForBeat(clicks[this.nextClick].beat) < horizon) {
+               this.startTime + clicks[this.nextClick].sec < horizon) {
             if (this.metronome) {
-                const when = this.secForBeat(clicks[this.nextClick].beat);
+                const when = this.startTime + clicks[this.nextClick].sec;
                 if (when >= ctx.currentTime) {
                     AudioEngine.click(when, clicks[this.nextClick].accent);
                 }
@@ -194,7 +204,7 @@ export const Playback = {
         }
 
         if (this.nextEvent >= ev.length &&
-            ctx.currentTime > this.secForBeat(this.comp.totalBeats) + 0.05) {
+            ctx.currentTime > this.startTime + this.comp.totalSec + 0.05) {
             this.stop();
             if (window.flutter_inappwebview)
                 window.flutter_inappwebview.callHandler('onPlaybackEnded');

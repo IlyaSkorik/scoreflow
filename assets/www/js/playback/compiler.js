@@ -12,6 +12,7 @@ import {
     effectiveTimeSignatures, measureCapacityQ, measureStarts, metronomeClicks,
 } from '../domain/timesig.js';
 import { expandMeasureOrder } from '../domain/repeats.js';
+import { buildTempoMap, tempoSpq } from '../domain/tempo.js';
 
 // Tie-merge для playback: внутри каждого голоса (события уже в порядке
 // времени) поглощаем цепочку лиг длительности в одно событие — один
@@ -87,7 +88,7 @@ function expandEvents(linearEvents, order, originalStarts, originalCapsQ, effTs)
 // (starts[mi]) по ДЕЙСТВУЮЩЕМУ размеру КАЖДОГО такта (mid-score смены метра),
 // поэтому неполные/перелитые такты и разные размеры не сбивают временную сетку.
 // Паузы и пустые такты дают «якоря» для playhead.
-export function compilePlayback(payload) {
+export function compilePlayback(payload, baseTempoOverride) {
     const isDrums = payload.instrument === 'drums';
     const voiceIds = isDrums ? ['perc'] : ['treble', 'bass'];
     const measures = payload.measures || [];
@@ -202,11 +203,45 @@ export function compilePlayback(payload) {
     // повтор с начала; missing end repeat не меняет порядок.
     const measureOrder = expandMeasureOrder(measures);
     const expanded = expandEvents(events, measureOrder, starts, capsQ, effTs);
+
+    // Tempo mapping — ЕДИНСТВЕННОЕ место превращения долей в АБСОЛЮТНОЕ время.
+    // Строим на РАЗВЁРНУТОЙ таймлайн-сетке (repeat/volta уже развёрнуты): базовый
+    // темп на доле 0 + смены `_tempo` каждого ИСХОДНОГО такта на его развёрнутой
+    // позиции (repeat повторяет смену на каждом проходе). Каждому событию и щелчку
+    // проставляем startSec/durSec/sec — scheduler читает готовое время, не считая
+    // темп. tempoMap отдаём наружу для playhead (сек->доли) и метронома.
+    const baseTempo = baseTempoOverride || payload.tempo || 120;
+    const tempoAnchors = [{ beat: 0, spq: tempoSpq(baseTempo, 1) }];
+    for (let oi = 0; oi < measureOrder.length; oi++) {
+        const src = measureOrder[oi];
+        const marks = (measures[src] && measures[src]._tempo) || [];
+        const dstBase = expanded.starts[oi] || 0;
+        for (let k = 0; k < marks.length; k++) {
+            tempoAnchors.push({
+                beat: dstBase + (marks[k].beat || 0),
+                spq: tempoSpq(marks[k].bpm, marks[k].unit),
+            });
+        }
+    }
+    const tempoMap = buildTempoMap(tempoAnchors);
+    for (let i = 0; i < expanded.events.length; i++) {
+        const e = expanded.events[i];
+        e.startSec = tempoMap.secAt(e.startBeat);
+        e.durSec = tempoMap.secAt(e.startBeat + e.durationBeats) - e.startSec;
+    }
+    const clicks = expanded.clicks;
+    for (let i = 0; i < clicks.length; i++) clicks[i].sec = tempoMap.secAt(clicks[i].beat);
+    const totalSec = tempoMap.secAt(expanded.totalBeats);
+
     return {
         events: expanded.events,
         linearEvents: events,
         totalBeats: expanded.totalBeats,
         linearTotalBeats: totalBeats,
+        // Tempo map (доли<->секунды) и полное время воспроизведения. ЕДИНЫЙ конвертер
+        // времени: scheduler берёт startSec/durSec событий и sec щелчков отсюда,
+        // а обратное преобразование (сек->доли) — для playhead.
+        tempoMap: tempoMap, totalSec: totalSec,
         // Сетка тактов для планировщика: абсолютные старты (+финал) и ёмкости
         // (четверти) КАЖДОГО такта — единый источник для playhead/строк (вместо
         // прежнего глобального measureQ). Метроном — готовая сетка щелчков с
