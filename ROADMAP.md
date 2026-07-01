@@ -4,10 +4,10 @@
 > against the actual codebase, not aspirations.
 >
 > Last reviewed: **2026-07-01** · Flutter 3.44.3 · Material 3 · VexFlow 4.2.2 · ES Modules.
-> Latest: professional Articulations System (staccato / staccatissimo / accent /
-> marcato / tenuto — first-class per-note marks; the final expressive layer in
-> the compiler modifies the PlaybackEvent after dynamics/hairpins, shared
-> screen/PDF engraving opposite the stem; scheduler stays notation-agnostic).
+> Latest: professional Tempo Changes System (absolute ♩ = N at any rhythmic
+> position — first-class notation objects; playback timing is now compiler-driven
+> via a single beats→seconds tempo map resolved once, shared screen/PDF engraving
+> above the staff; scheduler stays notation-agnostic and never computes tempo).
 
 ---
 
@@ -223,6 +223,19 @@ Secondary goals:
   * Editor tool (toggle / multiple / remove), Undo / Redo, autosave
   * Serialization, legacy loading; articulations stay attached to their note through reflow
   * Future-ready for fermata, breath mark, caesura and humanized attack/release
+* [x] Professional Tempo Changes System
+
+  * Absolute tempo marks (♩ = N) at any rhythmic position (first-class `_tempo`)
+  * Playback timing is now compiler-driven — one tempo map converts beats → seconds
+  * Tempo resolved exactly once; events carry absolute `startSec`/`durSec`
+  * Scheduler is notation-agnostic (reads absolute time, never computes tempo)
+  * Mid-measure and multiple tempo changes; deterministic; repeats/voltas re-apply per pass
+  * Tempo changes alter playback time only — note durations in beats are unchanged
+  * Professional engraving above the staff (notehead + stem + "= N")
+  * Shared screen/PDF rendering; sits above voltas, collision-free headroom
+  * Editor tool (presets 40–160 + custom BPM, insert / edit / remove)
+  * Undo / Redo, serialization, legacy loading; time-anchored reflow
+  * Future-ready for rit., accel., a tempo, tempo text, metric modulation, swing
 
 ---
 
@@ -245,6 +258,7 @@ Secondary goals:
 * [x] Compiler-resolved voltas
 * [x] Compiler-resolved hairpins (velocity interpolation)
 * [x] Compiler-resolved articulations (duration / velocity / attack)
+* [x] Compiler-driven tempo mapping (beats → absolute time)
 * [x] Shared perceptual velocity curve
 * [x] Unified velocity → gain pipeline
 
@@ -274,6 +288,7 @@ Secondary goals:
 * [x] Volta editor
 * [x] Hairpin editor
 * [x] Articulation editor
+* [x] Tempo editor
 * [x] Score library
 
   * Create
@@ -322,12 +337,15 @@ Secondary goals:
 
 ### Tempo
 
-* [ ] Tempo markings
-* [ ] Mid-score tempo changes
+> Builds on the completed **Professional Tempo Changes System** (absolute ♩ = N,
+> compiler-driven timing). Gradual changes extend the tempo map with variable-spq
+> segments; a tempo / tempo text are sibling anchors — no redesign.
+
 * [ ] Accelerando
 * [ ] Ritardando
 * [ ] A tempo
-* [ ] Playback support
+* [ ] Tempo text (Allegro, Andante …)
+* [ ] Metric modulation
 
 ---
 
