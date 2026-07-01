@@ -3,10 +3,11 @@
 > Single source of truth for the project's state. Completed items are verified
 > against the actual codebase, not aspirations.
 >
-> Last reviewed: **2026-06-29** · Flutter 3.44.3 · Material 3 · VexFlow 4.2.2 · ES Modules.
-> Latest: professional Barline System (8 types — first-class per-measure notation
-> object, native VexFlow + custom engraving, shared screen/PDF, reflow-safe;
-> architectural foundation for the Repeat System).
+> Last reviewed: **2026-07-01** · Flutter 3.44.3 · Material 3 · VexFlow 4.2.2 · ES Modules.
+> Latest: professional Volta System (first & second endings — first-class
+> range-anchored notation object, shared screen/PDF bracket engraving, repeat +
+> volta expansion in one compiler authority, reflow-safe; completes the
+> professional repeat architecture).
 
 ---
 
@@ -142,6 +143,22 @@ Secondary goals:
   * Serialization, legacy loading, autosave
   * Reflow-safe positional anchor (by measure index)
   * Architectural foundation for Repeat Counts, Voltas, D.C., D.S., Fine, Segno, Coda
+* [x] Professional Volta System (first & second endings)
+
+  * First-class volta notation object (per-measure `_volta`, range span)
+  * First ending / Second ending / custom ending numbers (`numbers` list — future-ready for 3rd/4th/arbitrary)
+  * Single-measure and multi-measure endings
+  * Professional engraving: horizontal bracket + vertical hooks + ending number
+  * Closing hook derived from ending adjacency (last ending open)
+  * System-break aware (per-system bracket segments, number only on the first)
+  * Grand-staff aware (bracket above the top staff)
+  * Shared screen/PDF volta rendering (visually identical)
+  * Compiler-resolved playback: repeat + volta expansion in one authority
+  * Correct entry into the second ending, inactive endings skipped
+  * Deterministic playback with no infinite loops; scheduler remains volta-agnostic
+  * Undo / Redo, serialization, legacy loading, autosave
+  * Reflow-safe positional anchor (by measure index)
+  * Completes the professional repeat architecture
 * [x] Accidentals
 
   * Sharp
@@ -195,6 +212,7 @@ Secondary goals:
 * [x] Compiler-resolved accidentals
 * [x] Compiler-resolved dynamics
 * [x] Compiler-resolved repeats
+* [x] Compiler-resolved voltas
 * [x] Shared perceptual velocity curve
 * [x] Unified velocity → gain pipeline
 
@@ -221,6 +239,7 @@ Secondary goals:
 * [x] Slur creation
 * [x] Dynamics editor
 * [x] Repeat editor
+* [x] Volta editor
 * [x] Score library
 
   * Create
@@ -252,13 +271,12 @@ Secondary goals:
 
 ### Repeat Extensions
 
-> Builds directly on the completed **Professional Repeat System**. Repeat
-> Counts, Voltas, D.C., D.S., Fine, Segno and Coda are sibling boundary objects
-> that extend the same compiler expansion pipeline; scheduler remains unchanged.
+> Builds directly on the completed **Professional Repeat System** and
+> **Professional Volta System**. Repeat Counts, D.C., D.S., Fine, Segno and Coda
+> are sibling boundary objects that extend the same compiler expansion pipeline;
+> scheduler remains unchanged.
 
 * [ ] Repeat Count
-* [ ] First ending (volta)
-* [ ] Second ending (volta)
 * [ ] D.C. al Fine
 * [ ] D.S. al Coda
 * [ ] Segno

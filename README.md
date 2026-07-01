@@ -80,6 +80,7 @@ Unlike traditional desktop-first notation software, ScoreFlow is designed with a
 | Mid-score meter changes|    ✅   |
 | Barlines (8 types)     |    ✅   |
 | Repeats                |    ✅   |
+| Voltas (1st/2nd ending)|    ✅   |
 | Professional beaming   |    ✅   |
 | Automatic rest filling |    ✅   |
 | Undo / Redo            |    ✅   |
