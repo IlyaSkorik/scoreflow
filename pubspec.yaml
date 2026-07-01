@@ -39,6 +39,7 @@ flutter:
     - assets/www/js/domain/
     - assets/www/js/playback/
     - assets/www/js/render/
+    - assets/www/js/print/
     - assets/www/js/bridge/
     # Сэмплы концертного рояля (Salamander, оффлайн). Файлы кладёт
     # tools/fetch_salamander.mjs; manifest.json присутствует всегда.

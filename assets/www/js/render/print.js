@@ -1,17 +1,24 @@
-// [ScoreFlow engine] Print Engine — вынесено из index.html без изменений
-// логики. Промышленная постраничная вёрстка A4 (Justification): системная и
-// страничная пагинация, горизонтальный/вертикальный justify, заголовок,
-// отрисовка систем и лиг печати (per-page ctx). Слой поверх спейсинга VexFlow:
-// минимальные ширины тактов берём из Formatter.preCalculateMinTotalWidth
-// (нелинейный спейсинг по длительностям заложен в движке), а пагинацию и
-// выравнивание по обоим краям считаем сами — этого слоя в VexFlow нет (как
-// layout-слой над спейсингом в MuseScore).
+// [ScoreFlow engine] Print Engine — постраничная печатная вёрстка.
 //
-// Общие примитивы (buildVoice/beamGroups/buildTuplets/measureMinWidth) берём
-// из layout.js — print НЕ зависит от экранного render.js. VF берётся из
-// глобального Vex.Flow (как и в остальном движке).
+//   Score -> Print Layout Engine -> Page Layout -> PDF
+//
+// Печать — ОТДЕЛЬНЫЙ продукт, не масштабирование экрана: геометрия считается
+// ОТ БУМАГИ (print/paper.js), плотность — издательская (стан 7 мм), разбиение
+// тактов на системы и систем на страницы — оптимальное ДП по badness
+// (print/breaks.js, как перенос строк TeX), высота каждой системы — из её
+// СОДЕРЖИМОГО (print/metrics.js + print/vertical.js, модельные габариты без
+// отрисовки — пагинация детерминированна за один проход). PDF просто печатает
+// результат (@media print + системный принтер WebView).
+//
+// Отрисовка объектов — ОБЩИМИ с экраном слоями (voltas/tempo/navigation/
+// dynamics/hairpins/barlines + примитивы layout.js): экран и печать различаются
+// ВЁРСТКОЙ (что где стоит), но не гравировкой (как оно рисуется). Экранного
+// состояния (state.dynSpacing и пр.) печать НЕ читает.
+//
+// Масштаб применяется ОДНИМ вектором: страница-SVG получает физический размер
+// в px и viewBox в гравировочных единицах — все слои рисуют в родных единицах
+// VexFlow без пересчёта координат.
 import { el } from '../utils/dom.js';
-import { state } from '../utils/state.js';
 import { buildVoice, beamGroups, buildTuplets, measureMinWidth } from './layout.js';
 import { voiceListOf, nextRealNote, sameKeys } from '../domain/notes.js';
 import { effectiveKeys, cancelKeyFor } from '../domain/keysig.js';
@@ -29,56 +36,58 @@ import { dynamicsBaseline } from './dynamics_layout.js';
 import { noteOnsets, indexAtBeat, readHairpins } from '../domain/dynamics.js';
 import { measureCapacityQ, measureStarts } from '../domain/timesig.js';
 import { drawHairpins } from './hairpins.js';
+import { paperGeometry } from '../print/paper.js';
+import { breakSystems, breakPages } from '../print/breaks.js';
+import { measureExtents, dynamicsPresence } from '../print/metrics.js';
+import { systemProfile } from '../print/vertical.js';
+import { titleBlockHeight, drawTitleBlock, drawFooter } from '../print/header.js';
 
-const PAGE = { W: 794, H: 1123, mx: 56, mtop: 72, mbot: 56 }; // A4 @96dpi
-const MEASURE_PAD = 16;    // правый запас в такте (дыхание/барлайн)
-const SYS_GAP_MIN = 12;    // мин. интервал между системами
-const SYS_GAP_MAX = 40;    // потолок интервала (плотная вёрстка)
+const MEASURE_PAD = 14;    // правый запас в такте (дыхание/барлайн)
 const NOTE_RIGHT_PAD = 10; // запас справа от последней ноты
+const SYS_GAP_MIN = 26;    // мин. интервал между системами (к их резервам)
+const SYS_GAP_MAX = 64;    // потолок интервала при вертикальном justify
+const MARK_GAP = 8;        // зазор верхней метки над нижележащим слоем
+const LAST_SYS_JUSTIFY = 0.6; // последняя система тянется, если fill >= 60%
+const MNUM_PX = 9;         // физический кегль номера такта (px @96dpi)
 
-function printW() { return PAGE.W - 2 * PAGE.mx; }
-function printH() { return PAGE.H - PAGE.mtop - PAGE.mbot; }
-
-// Конфигурация станов под инструмент. Вертикальные отступы РАСШИРЯЮТСЯ ровно на
-// столько, на сколько их раздвинул адаптивный экранный рендер (state.dynSpacing),
-// — так PDF повторяет экран (станы раздвинуты под высоты нот и динамику). Без
-// предварительного экранного рендера берём тюнингованные значения по умолчанию.
-function layoutConfig(instrument) {
-    const sp = state.dynSpacing;
+// Конфигурация станов под инструмент (клефы/голоса; вертикаль — per-system).
+function staffConfig(instrument) {
     if (instrument === 'drums') {
-        const extra = sp ? Math.max(0, sp.rowHDrums - 130) : 0;
         return {
             grand: false,
-            staves: [{ voice: 'perc', clef: 'percussion', dy: 0 }],
+            staves: [{ voice: 'perc', clef: 'percussion' }],
             keySig: false,
-            systemHeight: 96 + extra,
         };
     }
-    const extraGap = sp ? Math.max(0, sp.bassDY - 90) : 0;
-    const extraSys = sp ? Math.max(0, sp.rowHGrand - 200) : 0;
     return {
         grand: true,
         staves: [
-            { voice: 'treble', clef: 'treble', dy: 0 },
-            { voice: 'bass', clef: 'bass', dy: 82 + extraGap },
+            { voice: 'treble', clef: 'treble' },
+            { voice: 'bass', clef: 'bass' },
         ],
         keySig: true,
-        systemHeight: 172 + extraSys,
     };
 }
 
-function newPage(root) {
+// Новая страница: SVG физического размера с viewBox в гравировочных единицах.
+function newPage(root, geom) {
     const div = document.createElement('div');
     div.className = 'pf-page';
     root.appendChild(div);
     const r = new Vex.Flow.Renderer(div, Vex.Flow.Renderer.Backends.SVG);
-    r.resize(PAGE.W, PAGE.H);
+    r.resize(geom.W, geom.H);
+    const svg = div.querySelector('svg');
+    if (svg) {
+        svg.setAttribute('viewBox', '0 0 ' + geom.W + ' ' + geom.H);
+        svg.setAttribute('width', geom.pageWpx);
+        svg.setAttribute('height', geom.pageHpx);
+        svg.style.width = geom.pageWpx + 'px';
+        svg.style.height = geom.pageHpx + 'px';
+    }
     return r.getContext();
 }
 
 // Ширина «головы» стана: ключ + ключевые знаки [+ бекары-отмена] [+ размер].
-// [timeStr] — строка размера, если на первом такте системы размер меняется
-// (или null — размер не рисуется в голове).
 function headWidth(VF, ctx, cfg, keySig, timeStr, cancelSig) {
     const s = new VF.Stave(0, 0, 400);
     s.addClef(cfg.staves[0].clef);
@@ -89,10 +98,7 @@ function headWidth(VF, ctx, cfg, keySig, timeStr, cancelSig) {
     return s.getNoteStartX() - s.getX();
 }
 
-// Дополнительная ширина смены тональности И/ИЛИ размера В СЕРЕДИНЕ системы
-// (стан без ключа): насколько ключевые знаки [+ бекары-отмена] и/или глиф
-// размера сдвигают начало нот относительно голого такта. Нужна, чтобы такт со
-// сменой получил место и не сжал ноты. null-аргументы пропускаются.
+// Дополнительная ширина смены тональности И/ИЛИ размера В СЕРЕДИНЕ системы.
 function midLeadWidth(VF, ctx, keyName, cancelName, timeStr) {
     const bare = new VF.Stave(0, 0, 400);
     bare.setContext(ctx);
@@ -105,71 +111,39 @@ function midLeadWidth(VF, ctx, keyName, cancelName, timeStr) {
     return Math.max(0, s.getNoteStartX() - bare.getNoteStartX());
 }
 
-function textWidth(ctx, str, approxCharW) {
-    try {
-        const w = ctx.measureText(str).width;
-        if (w && w > 0) return w;
-    } catch (e) { /* fallthrough */ }
-    return str.length * (approxCharW || 8);
-}
-
-function drawTitle(ctx, title, composer) {
-    ctx.save();
-    ctx.setFont('serif', 22, 'bold');
-    ctx.fillText(title, (PAGE.W - textWidth(ctx, title, 12)) / 2, PAGE.mtop - 34);
-    if (composer) {
-        ctx.setFont('serif', 13, '');
-        ctx.fillText(composer,
-            PAGE.W - PAGE.mx - textWidth(ctx, composer, 7), PAGE.mtop - 14);
-    }
-    ctx.restore();
-}
-
-// Отрисовка одной системы (строки) на странице. [sysIndex] — сквозной
-// номер системы, [registry] — реестр noteId -> {sn, ctx, sys} для
-// последующего прохода лиг (Tie/Slur), общий на всю печать.
-function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
-                    effKeys, bars, sysIndex, registry, staveReg, voltas, vpad,
-                    tempoMarks, tpad, navMarks, npad, sysPad) {
-    let x = PAGE.mx;
-    // Станы опускаем на ПОФАКТОВЫЙ верхний отступ ЭТОЙ системы (место под вольты,
-    // темп и навигацию её тактов); 0 — если сверху ничего нет. Размеры слоёв
-    // (vpad/tpad/npad) ниже используются лишь для пофактового стекинга меток.
-    const staveY = yTop + (sysPad || 0);
-    // Боксы тактов {x,w} и Y верхней линейки — для прохода вольт/темпа системы.
+// Отрисовка одной системы. [env] — окружение печати (геометрия, разрешённые
+// слои партитуры, реестры, вертикальный профиль системы). [yTop] — верх ПОЛОСЫ
+// системы (стан ниже на sys.pro.padTop).
+function drawSystem(VF, ctx, sys, yTop, env) {
+    const geom = env.geom, cfg = env.cfg, measures = env.measures;
+    const effTs = env.effTs, tsStr = env.tsStr, effKeys = env.effKeys;
+    const bars = env.bars;
+    let x = geom.mx;
+    const staveY = yTop + sys.pro.padTop;
+    // Сдвиги станов системы: grand — bass ниже на per-system bassDY.
+    const dyOf = cfg.grand ? [0, sys.pro.bassDY] : [0];
     const voltaBoxes = {};
     let bandTopY = null;
-    // Тональность головы системы (+ бекары-отмена, если система начинается со
-    // смены) — действующая тональность первого такта системы.
     const f = sys.firstMeasure;
     const sysKey = effKeys ? effKeys[f] : null;
     const sysCancel = (effKeys && f > 0) ? cancelKeyFor(effKeys[f - 1], effKeys[f]) : null;
-    // Размер в голове системы: на самой первой системе (такт 0) и на системе,
-    // начинающейся со смены размера; иначе не повторяется.
     const headTimeStr = (f === 0 || (f > 0 && tsStr[f] !== tsStr[f - 1]))
         ? tsStr[f] : null;
     sys.items.forEach(function (idx, pos) {
         const isFirst = (pos === 0);
         const content = sys.widths[idx];
         const staveW = (isFirst ? sys.L : 0) + content;
-        // Смена тональности В СЕРЕДИНЕ системы (не первый такт) — сразу после
-        // барлайна, с бекарами-отменой по правилам гравировки (VexFlow cancelKey).
         const midCancel = (effKeys && idx > 0) ? cancelKeyFor(effKeys[idx - 1], effKeys[idx]) : null;
         const midChange = !isFirst && cfg.keySig && midCancel != null;
-        // Смена размера в середине системы — также сразу после барлайна.
         const midTimeChange = !isFirst && idx > 0 && tsStr[idx] !== tsStr[idx - 1];
 
-        // Свежие голоса под отрисовку (ноты нельзя переиспользовать).
-        // measureIndex = idx — нужен реестру лиг (noteId "m:v:i"). Ёмкость
-        // VexFlow Voice — по размеру ЭТОГО такта.
         const voices = cfg.staves.map(function (st) {
             return buildVoice(VF, measures[idx][st.voice] || [], st.clef,
                 effTs[idx].beats, effTs[idx].beatValue, -1, idx, st.voice);
         });
 
-        // Станы такта.
-        const staves = cfg.staves.map(function (st) {
-            const stave = new VF.Stave(x, staveY + st.dy, staveW);
+        const staves = cfg.staves.map(function (st, si) {
+            const stave = new VF.Stave(x, staveY + dyOf[si], staveW);
             if (isFirst) {
                 stave.addClef(st.clef);
                 if (cfg.keySig && sysKey) stave.addKeySignature(sysKey, sysCancel || undefined);
@@ -177,15 +151,11 @@ function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
             } else if (midChange || midTimeChange) {
                 // Клеф середины системы не рисуется, но тональность берёт
                 // вертикальные линии знаков из getClef() — задаём контекст
-                // клефа явно (без глифа), чтобы знаки баса не встали по
-                // скрипичному. Размер от клефа не зависит.
+                // клефа явно (без глифа).
                 stave.clef = st.clef;
                 if (midChange) stave.addKeySignature(effKeys[idx], midCancel);
                 if (midTimeChange) stave.addTimeSignature(tsStr[idx]);
             }
-            // Правая граница до format/draw. На аколаде (grand staff) per-stave
-            // линии гасим — черту рисуем одной через всю аколаду после draw;
-            // на одиночном стане (ударные) ставим нативный тип сразу.
             if (cfg.grand) stave.setEndBarType(VF.Barline.type.NONE);
             else setupBarline(VF, stave, bars[idx]);
             stave.setContext(ctx);
@@ -193,43 +163,34 @@ function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
             return stave;
         });
 
-        // Реестр станов такта (для прохода оттенков): "mi:voice" ->
-        // {stave, ctx, sys}. sys группирует такты одной системы (общая база).
-        if (staveReg) {
+        if (env.staveReg) {
             cfg.staves.forEach(function (st, si) {
-                staveReg[idx + ':' + st.voice] =
-                    { stave: staves[si], ctx: ctx, sys: sysIndex };
+                env.staveReg[idx + ':' + st.voice] =
+                    { stave: staves[si], ctx: ctx, sys: env.sysIndex };
             });
         }
 
-        // Единый старт нот по всем станам системы (вертикальное выравнивание).
+        // Единый старт нот по всем станам системы.
         let startX = x;
         staves.forEach(function (s) { startX = Math.max(startX, s.getNoteStartX()); });
         staves.forEach(function (s) { s.setNoteStartX(startX); });
         const contentW = Math.max(40, (x + staveW) - startX - NOTE_RIGHT_PAD);
 
-        // Один форматтер на такт — ноты разных станов выравниваются по тактам.
-        const f = new VF.Formatter();
-        voices.forEach(function (v) { f.joinVoices([v]); });
-        // Tuplets — ДО форматирования (применяют множитель тиков).
+        const fmt = new VF.Formatter();
+        voices.forEach(function (v) { fmt.joinVoices([v]); });
         const tuplets = [];
         voices.forEach(function (v) {
             buildTuplets(VF, v).forEach(function (t) { tuplets.push(t); });
         });
-        f.format(voices, contentW);
+        fmt.format(voices, contentW);
 
         staves.forEach(function (s) { s.draw(); });
-        // Тактовая черта — ПОСЛЕ draw, общим с экраном кодом (render/barlines).
-        // Аколада: одна сплошная через оба стана; одиночный стан (ударные):
-        // нативную нарисовал VexFlow, кастартную дорисовываем здесь.
         if (cfg.grand) {
             drawGrandBarline(VF, ctx, staves[0], staves[staves.length - 1], bars[idx]);
         } else {
             staves.forEach(function (s) { drawCustomBarline(VF, ctx, s, bars[idx]); });
         }
         voices.forEach(function (v, si) {
-            // Балки создаём ДО отрисовки нот: тогда у забимованных нот
-            // не рисуются одиночные флажки (хвосты).
             const beams = VF.Beam.generateBeams(v.getTickables(), {
                 groups: beamGroups(VF, effTs[idx].beats, effTs[idx].beatValue),
                 beam_rests: false,
@@ -237,23 +198,19 @@ function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
             });
             v.draw(ctx, staves[si]);
             beams.forEach(function (b) { b.setContext(ctx).draw(); });
-
-            // Регистрируем ноты для прохода лиг (после draw — позиции готовы).
-            if (registry) {
+            if (env.registry) {
                 v.getTickables().forEach(function (t) {
                     if (!t.__hit || t.__hit.i < 0) return;
-                    registry[t.__hit.m + ':' + t.__hit.v + ':' + t.__hit.i] =
-                        { sn: t, ctx: ctx, sys: sysIndex };
+                    env.registry[t.__hit.m + ':' + t.__hit.v + ':' + t.__hit.i] =
+                        { sn: t, ctx: ctx, sys: env.sysIndex };
                 });
             }
         });
-        // Числа/скобки tuplet — после нот и балок.
         tuplets.forEach(function (t) {
             try { t.setContext(ctx).draw(); }
             catch (e) { console.error('tuplet draw failed:', e); }
         });
 
-        // Системная скобка + левая линия (клавишные).
         if (isFirst && cfg.grand) {
             new VF.StaveConnector(staves[0], staves[1])
                 .setType(VF.StaveConnector.type.BRACE).setContext(ctx).draw();
@@ -261,64 +218,58 @@ function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
                 .setType(VF.StaveConnector.type.SINGLE_LEFT).setContext(ctx).draw();
         }
 
-        // Номер первого такта системы — вплотную НАД верхней линией
-        // верхнего стана. Первый такт пьесы не нумеруем.
+        // Номер первого такта системы — над верхней линейкой (кроме такта 0).
         if (isFirst && sys.firstMeasure > 0) {
-            const topStave = staves[0];
+            const size = env.geom.fontU(MNUM_PX);
             ctx.save();
-            ctx.setFont('sans-serif', 11, '');
+            ctx.setFont('sans-serif', size, '');
             ctx.fillText(String(sys.firstMeasure + 1),
-                x + 1, topStave.getYForLine(0) - 4);
+                x + 1, staves[0].getYForLine(0) - 4);
             ctx.restore();
         }
 
-        // Бокс такта и Y верхней линейки — для скобок вольт этой системы.
         voltaBoxes[idx] = { x: x, w: staveW };
         if (bandTopY == null) bandTopY = staves[0].getYForLine(0);
 
         x += staveW;
     });
 
-    // Вольты этой системы — общим со экраном кодом (render/voltas). Сегмент
-    // рисуется только для вольт, пересекающих такты системы; растянутая через
-    // перенос вольта ложится сегментом на каждую систему.
-    if (voltas && voltas.length) {
-        drawVoltasInBand(ctx, voltas,
-            function (mi) { return voltaBoxes[mi] || null; }, bandTopY);
+    // --- Верхние метки системы: вольты -> темп -> навигация --------------
+    // Каждый слой стоит НАД выступающими нотами такта (topClearOf) и над
+    // нижележащими слоями ЭТОГО такта — ровно то место, что зарезервировал
+    // vertical.systemProfile.
+    const topClearOf = env.topClearOf;
+    if (env.voltas && env.voltas.length && bandTopY != null) {
+        // Линия вольты одна на систему — поднимаем над самым высоким тактом
+        // из тактов её диапазона в ЭТОЙ системе.
+        let clear = 0;
+        for (let s = 0; s < env.voltas.length; s++) {
+            const sp = env.voltas[s];
+            for (let mi = sp.start; mi <= sp.end; mi++) {
+                if (voltaBoxes[mi] && topClearOf(mi) > clear) clear = topClearOf(mi);
+            }
+        }
+        drawVoltasInBand(ctx, env.voltas,
+            function (mi) { return voltaBoxes[mi] || null; }, bandTopY - clear);
     }
 
-    // Темповые метки этой системы — общим со экраном кодом (render/tempo), НАД
-    // вольтами (bandTopY - vpad - зазор). X доли — из позиции ноты (реестр),
-    // иначе левый край такта. Рисуем только метки тактов этой системы.
-    // Пофактовое размещение: верхняя метка поднимается над станом ТОЛЬКО на
-    // высоту слоёв, реально стоящих над ЭТИМ тактом (вольта/темп), не глобально.
-    const voltaMeasures = {};
-    if (voltas) {
-        for (let s = 0; s < voltas.length; s++) {
-            for (let mi = voltas[s].start; mi <= voltas[s].end; mi++) voltaMeasures[mi] = true;
-        }
-    }
-    const tempoMeasures = {};
-    if (tempoMarks) {
-        for (let t = 0; t < tempoMarks.length; t++) tempoMeasures[tempoMarks[t].measure] = true;
-    }
-    if (tempoMarks && tempoMarks.length && bandTopY != null) {
-        const voices = cfg.staves.map(function (st) { return st.voice; });
-        const primary = voices[0];
-        const sysMarks = tempoMarks.filter(function (m) { return voltaBoxes[m.measure]; });
+    if (env.tempoMarks && env.tempoMarks.length && bandTopY != null) {
+        const primary = cfg.staves[0].voice;
+        const sysMarks = env.tempoMarks.filter(function (m) { return voltaBoxes[m.measure]; });
         drawTempos({
             VF: VF,
             marks: sysMarks,
             rowOf: function () { return 0; },
             baselineOf: function (r, mi) {
-                return bandTopY - (voltaMeasures[mi] ? (vpad || 0) : 0) - 8;
+                return bandTopY - topClearOf(mi)
+                    - (env.voltaMeasures[mi] ? env.vpad : 0) - MARK_GAP;
             },
             ctxOf: function () { return ctx; },
             xOf: function (mi, beat) {
                 const notes = (measures[mi] && measures[mi][primary]) || [];
                 const idx = indexAtBeat(noteOnsets(notes), beat);
                 if (idx >= 0) {
-                    const obj = registry[mi + ':' + primary + ':' + idx];
+                    const obj = env.registry[mi + ':' + primary + ':' + idx];
                     if (obj && obj.sn) {
                         try { return obj.sn.getAbsoluteX(); } catch (e) { /* fallthrough */ }
                     }
@@ -328,17 +279,16 @@ function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
         });
     }
 
-    // Навигация этой системы — общим с экраном кодом (render/navigation), НАД
-    // темпом/вольтами (bandTopY - vpad - tpad - зазор).
-    if (navMarks && navMarks.length && bandTopY != null) {
-        const sysNav = navMarks.filter(function (m) { return voltaBoxes[m.measure]; });
+    if (env.navMarks && env.navMarks.length && bandTopY != null) {
+        const sysNav = env.navMarks.filter(function (m) { return voltaBoxes[m.measure]; });
         drawNavigation({
             VF: VF,
             marks: sysNav,
             rowOf: function () { return 0; },
             baselineOf: function (r, mi) {
-                return bandTopY - (voltaMeasures[mi] ? (vpad || 0) : 0)
-                    - (tempoMeasures[mi] ? (tpad || 0) : 0) - 8;
+                return bandTopY - topClearOf(mi)
+                    - (env.voltaMeasures[mi] ? env.vpad : 0)
+                    - (env.tempoMeasures[mi] ? env.tpad : 0) - MARK_GAP;
             },
             boxOf: function (mi) { return voltaBoxes[mi] || null; },
             ctxOf: function () { return ctx; },
@@ -346,78 +296,66 @@ function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
     }
 }
 
-// Главный вход постраничной вёрстки: строит страницы A4 в #print-root,
-// возвращает их количество.
+// Главный вход печатной вёрстки: строит страницы (по умолчанию A4 portrait)
+// в #print-root, возвращает их количество.
 export function renderPrintPages(score) {
     const VF = Vex.Flow;
     const root = el('print-root');
     root.innerHTML = '';
 
-    const instrument = score.instrument === 'drums' ? 'drums' : 'piano';
-    const cfg = layoutConfig(instrument);
     const measures = score.measures || [];
-    // Действующая тональность КАЖДОГО такта (старт + смены `_key`) — единое
-    // разрешение из domain/keysig (та же логика, что у compiler/render).
+    if (measures.length === 0) return 0;
+
+    const geom = paperGeometry('a4');
+    const instrument = score.instrument === 'drums' ? 'drums' : 'piano';
+    const cfg = staffConfig(instrument);
+
+    // --- Разрешённые слои партитуры (единые domain-резолверы) -------------
     const effKeys = cfg.keySig ? effectiveKeys(measures, score.keySignature || 'C') : null;
-    // Действующий РАЗМЕР КАЖДОГО такта (старт + смены `_ts`) — единое разрешение
-    // из domain/timesig. Глиф размера рисуется ТОЛЬКО где меняется (первый такт +
-    // смены), как на экране; в начале систем размер не повторяется.
     const effTs = effectiveTimeSignatures(measures, score.timeSignature || '4/4');
     const tsStr = effTs.map(function (t) { return t.beats + '/' + t.beatValue; });
-    // Тип тактовой черты (правой границы) КАЖДОГО такта — единое разрешение из
-    // domain/barlines (та же логика, что на экране).
     const bars = effectiveRepeatBarlines(measures, effectiveBarlines(measures));
-    // Вольты — единое разрешение из domain/voltas; отрисовка общим со экраном
-    // кодом (render/voltas). Когда вольты есть, каждая система получает headroom
-    // (vpad) сверху под скобки.
     const voltas = effectiveVoltas(measures);
     const vpad = voltaHeadroom(voltas);
-    // Темповые метки (♩ = N) — единое разрешение из domain/tempo, отрисовка общим
-    // со экраном кодом (render/tempo). Живут НАД вольтами (доп. headroom tpad).
     const tempoMarks = readTempoMarks(measures);
     const tpad = tempoHeadroom(tempoMarks);
-    // Навигация — единое разрешение (render/navigation), общим с экраном кодом.
-    // Стоит НАД темпом/вольтами (доп. headroom npad).
     const navMarks = readNavigation(measures);
     const npad = navigationHeadroom(navMarks);
-    if (measures.length === 0) return 0;
-    // Карты тактов с верхними метками — для ПОФАКТОВОГО верхнего отступа системы.
-    // Слои вольта→темп→навигация складываются на ОДНОМ такте (см. baselineOf в
-    // drawSystem); система резервирует высоту самого высокого «столбика» над её
-    // тактами. Системы без верхних меток не раздвигаются (раньше глобальный
-    // vpad+tpad+npad раздвигал все системы одинаково).
-    const voltaMeasuresAll = {};
+
+    const voltaMeasures = {};
     for (let s = 0; s < voltas.length; s++) {
-        for (let mi = voltas[s].start; mi <= voltas[s].end; mi++) voltaMeasuresAll[mi] = true;
+        for (let mi = voltas[s].start; mi <= voltas[s].end; mi++) voltaMeasures[mi] = true;
     }
-    const tempoMeasuresAll = {};
-    for (let t = 0; t < tempoMarks.length; t++) tempoMeasuresAll[tempoMarks[t].measure] = true;
-    const navMeasuresAll = {};
-    for (let n = 0; n < navMarks.length; n++) navMeasuresAll[navMarks[n].measure] = true;
-    const stackPadOf = function (mi) {
-        return (voltaMeasuresAll[mi] ? vpad : 0)
-             + (tempoMeasuresAll[mi] ? tpad : 0)
-             + (navMeasuresAll[mi] ? npad : 0);
+    const tempoMeasures = {};
+    for (let t = 0; t < tempoMarks.length; t++) tempoMeasures[tempoMarks[t].measure] = true;
+    const navMeasures = {};
+    for (let n = 0; n < navMarks.length; n++) navMeasures[navMarks[n].measure] = true;
+    const stackOf = function (mi) {
+        return (voltaMeasures[mi] ? vpad : 0)
+             + (tempoMeasures[mi] ? tpad : 0)
+             + (navMeasures[mi] ? npad : 0);
     };
-    const systemPadOf = function (sys) {
-        let pad = 0;
-        for (let k = 0; k < sys.items.length; k++) {
-            const p = stackPadOf(sys.items[k]);
-            if (p > pad) pad = p;
-        }
-        return pad;
-    };
-    // Смена тональности / размера на такте i>0 (для ширины и отрисовки в
-    // середине системы). Размер на такте 0 — голова первой системы.
+
     const changedAt = function (i) {
         return effKeys && i > 0 && effKeys[i] !== effKeys[i - 1];
     };
-    const tsChange = function (i) {
-        return i > 0 && tsStr[i] !== tsStr[i - 1];
-    };
+    const tsChange = function (i) { return i > 0 && tsStr[i] !== tsStr[i - 1]; };
     const timeChangedAt = function (i) { return i === 0 || tsChange(i); };
 
-    // --- проход 1: минимальные ширины тактов (по размеру КАЖДОГО такта) ---
+    // --- Модельные вертикальные габариты (без отрисовки) ------------------
+    const topVoice = cfg.staves[0].voice;
+    const extTop = measureExtents(measures, topVoice, cfg.staves[0].clef);
+    const extBottom = cfg.grand
+        ? measureExtents(measures, 'bass', 'bass') : null;
+    const dynTop = dynamicsPresence(measures, topVoice);
+    const dynBottom = cfg.grand ? dynamicsPresence(measures, 'bass') : null;
+    const topClearOf = function (mi) {
+        const e = extTop[mi];
+        return e ? e.above : 0;
+    };
+
+    // --- Проход 1: минимальные ширины тактов -------------------------------
+    const ctx0 = newPage(root, geom); // первая страница; она же метрический ctx
     const cm = [];
     for (let i = 0; i < measures.length; i++) {
         const vs = cfg.staves.map(function (st) {
@@ -426,52 +364,39 @@ export function renderPrintPages(score) {
         });
         cm.push(Math.max(48, measureMinWidth(VF, vs)));
     }
-
-    // первая страница + замер дополнительной ширины смен тональности/размера в
-    // середине системы (учитывается в раскладке, чтобы такт со сменой не сжал
-    // ноты). Один общий lead на такт: тональность [+ отмена] и/или размер.
-    const ctx0 = newPage(root);
-    const lead = [];
+    // Ширины смен тональности/размера в середине системы.
+    const leads = [];
     for (let i = 0; i < measures.length; i++) {
         const kc = changedAt(i), tc = tsChange(i);
-        lead.push((kc || tc)
+        leads.push((kc || tc)
             ? midLeadWidth(VF, ctx0, kc ? effKeys[i] : null,
                 kc ? effKeys[i - 1] : null, tc ? tsStr[i] : null)
             : 0);
     }
-    // Ведущая ширина смены в середине системы (0, если такт — первый в системе:
-    // там смена уходит в «голову»).
-    const midLead = function (sys, k) {
-        return (k > sys.firstMeasure && (changedAt(k) || tsChange(k))) ? lead[k] : 0;
-    };
-    // Ширина «головы» системы по её действующей тональности (+ размер, если
-    // система начинается с такта 0 или со смены размера, + бекары-отмена при
-    // смене тональности).
-    const headOfSystem = function (f) {
-        const sysKey = effKeys ? effKeys[f] : null;
-        const cancel = (effKeys && f > 0) ? cancelKeyFor(effKeys[f - 1], effKeys[f]) : null;
-        const timeStr = timeChangedAt(f) ? tsStr[f] : null;
-        return headWidth(VF, ctx0, cfg, sysKey, timeStr, cancel);
-    };
-
-    // --- проход 2: разбиение на системы ---
-    const W = printW();
-    const systems = [];
-    let i = 0;
-    while (i < measures.length) {
-        const sys = { items: [], firstMeasure: i, L: headOfSystem(i) };
-        let used = sys.L;
-        while (i < measures.length) {
-            const add = cm[i] + MEASURE_PAD + midLead(sys, i);
-            if (sys.items.length > 0 && used + add > W) break;
-            sys.items.push(i);
-            used += add;
-            i++;
-        }
-        systems.push(sys);
+    // Ширины «голов» систем-кандидатов (система может начаться с любого такта).
+    const headW = [];
+    for (let i = 0; i < measures.length; i++) {
+        const sysKey = effKeys ? effKeys[i] : null;
+        const cancel = (effKeys && i > 0) ? cancelKeyFor(effKeys[i - 1], effKeys[i]) : null;
+        const timeStr = timeChangedAt(i) ? tsStr[i] : null;
+        headW.push(headWidth(VF, ctx0, cfg, sysKey, timeStr, cancel));
     }
 
-    // --- проход 3: горизонтальный justify ---
+    // --- Проход 2: оптимальное разбиение на системы (ДП) -------------------
+    const W = geom.contentW;
+    const systems = breakSystems({
+        count: measures.length,
+        widths: cm.map(function (w) { return w + MEASURE_PAD; }),
+        leads: leads,
+        headOf: function (i) { return headW[i]; },
+        W: W,
+    });
+    systems.forEach(function (sys) { sys.L = headW[sys.firstMeasure]; });
+
+    // --- Проход 3: горизонтальный justify ----------------------------------
+    const midLead = function (sys, k) {
+        return (k > sys.firstMeasure && (changedAt(k) || tsChange(k))) ? leads[k] : 0;
+    };
     systems.forEach(function (sys, si) {
         const budget = W - sys.L;
         const sumCm = sys.items.reduce(function (a, k) { return a + cm[k]; }, 0);
@@ -480,83 +405,76 @@ export function renderPrintPages(score) {
         const isLast = si === systems.length - 1;
         let delta = budget - natural;
         if (delta < 0) delta = 0;
-        const justify = !(isLast && natural / budget < 0.5);
+        // Последняя система тянется к правому полю только при достаточном
+        // заполнении (издательская конвенция: короткий хвост не растягивают).
+        const justify = !isLast || natural / budget >= LAST_SYS_JUSTIFY;
         sys.widths = {};
         sys.items.forEach(function (k) {
-            // Смена тональности — ФИКСИРОВАННАЯ часть ширины такта; justify
-            // распределяет остаток по содержимому (cm), не по ведущей ширине.
             let cw = cm[k] + MEASURE_PAD + midLead(sys, k);
             if (justify && sumCm > 0) cw += delta * (cm[k] / sumCm);
             sys.widths[k] = cw;
         });
     });
 
-    // --- проход 4: страничная раскладка (вертикальный justify) ---
-    const Hh = printH();
-    // Высота КАЖДОЙ системы — базовая + её ПОФАКТОВЫЙ верхний отступ (0, если над
-    // тактами системы нет вольт/темпа/навигации). Системы теперь разной высоты.
+    // --- Проход 4: вертикальный профиль каждой системы ---------------------
     systems.forEach(function (sys) {
-        sys.pad = systemPadOf(sys);
-        sys.height = cfg.systemHeight + sys.pad;
+        sys.pro = systemProfile({
+            grand: cfg.grand,
+            items: sys.items,
+            extTop: extTop,
+            extBottom: extBottom,
+            dynTop: dynTop,
+            dynBottom: dynBottom,
+            stackOf: stackOf,
+        });
     });
-    // Жадная упаковка систем по страницам с учётом их РАЗНЫХ высот (раньше был
-    // фиксированный perPage на одинаковую высоту).
-    const pages = [];
-    {
-        let cur = [];
-        let used = 0;
-        for (let s = 0; s < systems.length; s++) {
-            const need = (cur.length ? SYS_GAP_MIN : 0) + systems[s].height;
-            if (cur.length && used + need > Hh) {
-                pages.push(cur);
-                cur = [];
-                used = 0;
-            }
-            used += (cur.length ? SYS_GAP_MIN : 0) + systems[s].height;
-            cur.push(systems[s]);
-        }
-        if (cur.length) pages.push(cur);
-    }
 
-    // Реестр нот для прохода лиг: noteId -> {sn, ctx, sys}. Сквозной
-    // номер системы (sysGi) различает системы на одной странице (общий
-    // ctx) — лига внутри системы рисуется целиком, между системами —
-    // частичными дугами на соответствующих ctx.
-    const printObjs = {};
-    // Реестр станов "mi:voice" -> {stave, ctx} — нужен проходу оттенков.
-    const printStaves = {};
+    // --- Проход 5: оптимальное разбиение на страницы (ДП) -------------------
+    const titleH = titleBlockHeight(geom, score);
+    const pages = breakPages({
+        heights: systems.map(function (s) { return s.pro.height; }),
+        gap: SYS_GAP_MIN,
+        firstH: geom.contentH - titleH,
+        restH: geom.contentH,
+    });
+
+    // --- Отрисовка страниц ---------------------------------------------------
+    const printObjs = {};   // noteId -> {sn, ctx, sys} (проход лиг)
+    const printStaves = {}; // "mi:voice" -> {stave, ctx, sys} (проход оттенков)
     let sysGi = 0;
 
     for (let p = 0; p < pages.length; p++) {
-        const pageSystems = pages[p];
-        const ctx = (p === 0) ? ctx0 : newPage(root);
-        const n = pageSystems.length;
+        const idxs = pages[p];
+        const ctx = (p === 0) ? ctx0 : newPage(root, geom);
         const isLastPage = p === pages.length - 1;
-
         let headOffset = 0;
-        if (p === 0 && score.title) {
-            drawTitle(ctx, score.title, score.composer);
-            headOffset = score.composer ? 16 : 4;
-        }
-        const budgetH = Hh - headOffset;
+        if (p === 0) headOffset = drawTitleBlock(ctx, geom, score);
+        drawFooter(ctx, geom, p);
 
-        const sumH = pageSystems.reduce(function (a, s) { return a + s.height; }, 0);
-        let gap;
-        if (n > 1 && !isLastPage) {
-            gap = (budgetH - sumH) / (n - 1);
+        // Вертикальный justify: излишек — в интервалы (с потолком), последняя
+        // страница остаётся прижатой к верху (частичная страница — норма).
+        const budgetH = geom.contentH - headOffset;
+        const sumH = idxs.reduce(function (a, s) { return a + systems[s].pro.height; }, 0);
+        let gap = SYS_GAP_MIN;
+        if (idxs.length > 1 && !isLastPage) {
+            gap = (budgetH - sumH) / (idxs.length - 1);
             gap = Math.max(SYS_GAP_MIN, Math.min(SYS_GAP_MAX, gap));
-        } else {
-            gap = SYS_GAP_MIN;
         }
 
-        let y = PAGE.mtop + headOffset;
-        for (let k = 0; k < n; k++) {
-            drawSystem(VF, ctx, pageSystems[k], measures, cfg, y,
-                effTs, tsStr, effKeys, bars, sysGi, printObjs, printStaves,
-                voltas, vpad, tempoMarks, tpad, navMarks, npad,
-                pageSystems[k].pad);
+        let y = geom.mtop + headOffset;
+        for (let k = 0; k < idxs.length; k++) {
+            const sys = systems[idxs[k]];
+            drawSystem(VF, ctx, sys, y, {
+                geom: geom, cfg: cfg, measures: measures,
+                effTs: effTs, tsStr: tsStr, effKeys: effKeys, bars: bars,
+                sysIndex: sysGi, registry: printObjs, staveReg: printStaves,
+                voltas: voltas, vpad: vpad, voltaMeasures: voltaMeasures,
+                tempoMarks: tempoMarks, tpad: tpad, tempoMeasures: tempoMeasures,
+                navMarks: navMarks, npad: npad, navMeasures: navMeasures,
+                topClearOf: topClearOf,
+            });
             sysGi++;
-            y += pageSystems[k].height + gap;
+            y += sys.pro.height + gap;
         }
     }
 
@@ -564,8 +482,7 @@ export function renderPrintPages(score) {
     try { drawPrintTiesAndSlurs(VF, score, printObjs); }
     catch (err) { console.error('drawPrintTiesAndSlurs failed:', err); }
 
-    // Динамические оттенки и вилки — отдельным проходом (позиции нот и станы
-    // готовы). effTs передаём для абсолютной сетки долей (геометрия вилок).
+    // Динамические оттенки и вилки — отдельным проходом.
     try { drawPrintDynamics(VF, score, printObjs, printStaves, effTs); }
     catch (err) { console.error('drawPrintDynamics failed:', err); }
 
@@ -573,15 +490,12 @@ export function renderPrintPages(score) {
 }
 
 // Проход оттенков для печати — ТОТ ЖЕ алгоритм, что на экране (dynamicsBaseline):
-// одна базовая линия на (система+голос), под нотами, без столкновений. Геометрию
-// берём из VF (StaveNote.getBoundingBox / Stave.getYForLine), позицию СЧИТАЕТ
-// общий слой — поэтому PDF и экран совпадают.
+// одна базовая линия на (система+голос), под нотами, без столкновений.
 function drawPrintDynamics(VF, score, registry, staveReg, effTs) {
     const measures = score.measures || [];
     const voices = voiceListOf(score);
 
-    // --- 1. Линейки станов по группе "sys:voice" (система — на одной странице,
-    //         поэтому координаты/ctx согласованы внутри группы) ---
+    // --- 1. Линейки станов по группе "sys:voice" ---
     const staffBot = {}, staffTop = {};
     for (const k in staveReg) {
         const sr = staveReg[k];
@@ -638,9 +552,7 @@ function drawPrintDynamics(VF, score, registry, staveReg, effTs) {
         }
     }
 
-    // --- 5. Вилки (cresc./dim.) — общий слой render/hairpins (тот же код, что и
-    //         на экране). Аксессоры печати: sys как «строка», станы/ноты — из
-    //         реестров. Абсолютная сетка долей — из effTs. ---
+    // --- 5. Вилки (cresc./dim.) — общий слой render/hairpins ---
     const hairpins = readHairpins(measures);
     if (hairpins.length) {
         const topVoice = voices[0];
@@ -653,6 +565,8 @@ function drawPrintDynamics(VF, score, registry, staveReg, effTs) {
         drawHairpins({
             hairpins: hairpins,
             starts: starts,
+            // Издательский раствор устья клина (~3 мм при стане 7 мм).
+            half: 8,
             rowOf: function (mi) {
                 const sr = staveReg[mi + ':' + topVoice];
                 return sr ? sr.sys : null;
@@ -684,7 +598,6 @@ function drawPrintDynamics(VF, score, registry, staveReg, effTs) {
                 } catch (e) { return null; }
             },
             ctxOf: function (sys) {
-                // ctx системы: у любого стана этой системы он общий.
                 for (const k in staveReg) {
                     if (staveReg[k].sys === sys) return staveReg[k].ctx;
                 }
@@ -694,9 +607,8 @@ function drawPrintDynamics(VF, score, registry, staveReg, effTs) {
     }
 }
 
-// Проход лиг для печати: как drawTiesAndSlurs, но ctx у каждой ноты свой
-// (страницы — разные SVG). Внутри одной системы — целая дуга; между
-// системами — частичные дуги на ctx каждого конца.
+// Проход лиг для печати: внутри одной системы — целая дуга; между системами —
+// частичные дуги на ctx каждого конца (страницы — разные SVG).
 function drawPrintTiesAndSlurs(VF, score, registry) {
     const measures = score.measures || [];
     const voices = voiceListOf(score);
