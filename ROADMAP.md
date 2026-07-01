@@ -4,10 +4,11 @@
 > against the actual codebase, not aspirations.
 >
 > Last reviewed: **2026-07-01** · Flutter 3.44.3 · Material 3 · VexFlow 4.2.2 · ES Modules.
-> Latest: professional Tempo Changes System (absolute ♩ = N at any rhythmic
-> position — first-class notation objects; playback timing is now compiler-driven
-> via a single beats→seconds tempo map resolved once, shared screen/PDF engraving
-> above the staff; scheduler stays notation-agnostic and never computes tempo).
+> Latest: professional Navigation System (Segno, Coda, To Coda, Fine, D.C./D.S.
+> and their al Fine / al Coda variants) — first-class notation objects forming
+> their own layer. Playback expansion is now linear → repeats → voltas →
+> navigation → events → scheduler; the compiler is the only authority, jumps are
+> deterministic and loop-free, and the scheduler stays notation-agnostic.
 
 ---
 
@@ -37,6 +38,9 @@ Secondary goals:
 * **Bridge** — Flutter ↔ JavaScript communication via Base64 JSON.
 * **Storage** — Offline-first JSON files (`ScoreRepository`).
 * **Playback** — Web Audio look-ahead scheduler with sampled piano/drums and synth fallback.
+* **Playback compiler** — the single authority that turns notation into events. Expansion pipeline:
+  linear measures → repeats → voltas → navigation → tempo mapping → playback events → scheduler.
+  The scheduler is notation-agnostic (no repeat/volta/navigation/tempo logic).
 * **Rendering** — Shared engraving pipeline for screen and PDF.
 
 ---
@@ -236,6 +240,25 @@ Secondary goals:
   * Editor tool (presets 40–160 + custom BPM, insert / edit / remove)
   * Undo / Redo, serialization, legacy loading; time-anchored reflow
   * Future-ready for rit., accel., a tempo, tempo text, metric modulation, swing
+* [x] Professional Navigation System
+
+  * Segno, Coda, To Coda, Fine
+  * D.C., D.C. al Fine, D.C. al Coda
+  * D.S., D.S. al Fine, D.S. al Coda
+  * First-class navigation notation object (per-measure `_nav`) — its own layer,
+    not a barline and not a repeat
+  * Playback expansion pipeline: linear → repeats → voltas → **navigation** →
+    events → scheduler (compiler is the only authority)
+  * Wraps repeat/volta expansion without redesigning either
+  * Deterministic: jumps execute exactly once; no infinite loops
+  * Repeats observed on the first pass, not on the D.C./D.S. return (convention)
+  * Professional engraving above the staff (Segno/Coda glyphs, italic D.C./D.S./…)
+  * Sits above tempo/voltas, collision-free headroom
+  * Shared screen/PDF rendering (visually identical)
+  * Editor tool (all 10 marks; insert / replace / remove), Undo / Redo, autosave
+  * Serialization, legacy loading; reflow-safe positional anchor (by measure index)
+  * Scheduler remains notation-agnostic
+  * Future-ready for multiple Segnos/Codas, rehearsal marks, jump labels, roadmaps
 
 ---
 
@@ -259,6 +282,7 @@ Secondary goals:
 * [x] Compiler-resolved hairpins (velocity interpolation)
 * [x] Compiler-resolved articulations (duration / velocity / attack)
 * [x] Compiler-driven tempo mapping (beats → absolute time)
+* [x] Compiler-resolved navigation (D.C. / D.S. / Coda / Fine jumps)
 * [x] Shared perceptual velocity curve
 * [x] Unified velocity → gain pipeline
 
@@ -289,6 +313,7 @@ Secondary goals:
 * [x] Hairpin editor
 * [x] Articulation editor
 * [x] Tempo editor
+* [x] Navigation editor
 * [x] Score library
 
   * Create
@@ -320,18 +345,11 @@ Secondary goals:
 
 ### Repeat Extensions
 
-> Builds directly on the completed **Professional Repeat System** and
-> **Professional Volta System**. Repeat Counts, D.C., D.S., Fine, Segno and Coda
-> are sibling boundary objects that extend the same compiler expansion pipeline;
-> scheduler remains unchanged.
+> The **Professional Navigation System** (Segno, Coda, To Coda, Fine, D.C./D.S.
+> and their al Fine / al Coda variants) is complete — it wraps the repeat/volta
+> expansion as its own layer. Repeat Count remains as a sibling extension.
 
-* [ ] Repeat Count
-* [ ] D.C. al Fine
-* [ ] D.S. al Coda
-* [ ] Segno
-* [ ] Coda
-* [ ] Fine
-* [ ] Playback support
+* [ ] Repeat Count (×3, ×4 …)
 
 ---
 

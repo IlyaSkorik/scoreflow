@@ -76,6 +76,7 @@ Unlike traditional desktop-first notation software, ScoreFlow is designed with a
 | Hairpins (cresc/dim)   |    ✅   |
 | Articulations          |    ✅   |
 | Tempo changes (♩ = N)  |    ✅   |
+| Navigation (D.C./D.S.) |    ✅   |
 | Key signatures         |    ✅   |
 | Mid-score key changes  |    ✅   |
 | Courtesy naturals      |    ✅   |
