@@ -20,6 +20,7 @@ import { noteOnsets, indexAtBeat } from '../domain/dynamics.js';
 import { setupBarline, drawCustomBarline, setupGrandBarline, drawGrandBarline } from './barlines.js';
 import { drawVoltasInBand, voltaHeadroom } from './voltas.js';
 import { drawTempos, tempoHeadroom } from './tempo.js';
+import { drawNavigation, navigationHeadroom, readNavigation } from './navigation.js';
 import { Playback } from '../playback/scheduler.js';
 
 function clearCanvas() {
@@ -119,6 +120,10 @@ export function render(score, forcedWidth) {
     // есть, строка получает доп. headroom (tpad) поверх voltapad.
     const tempoMarks = readTempoMarks(measures);
     const tpad = tempoHeadroom(tempoMarks);
+    // Навигация (Segno/Coda/D.C./D.S./…) — единое разрешение из render/navigation,
+    // отрисовка общим с печатью кодом. Стоит НАД темпом/вольтами (доп. npad).
+    const navMarks = readNavigation(measures);
+    const npad = navigationHeadroom(navMarks);
 
     // Реальная ширина «головы» стана по ФАКТИЧЕСКИМ начальным модификаторам
     // (ключ [+ тональность с бекарами-отменой] [+ размер]), через getNoteStartX
@@ -177,7 +182,7 @@ export function render(score, forcedWidth) {
     // Полная высота строки с учётом headroom вольт (vpad) и темпа (tpad),
     // резервируемых сверху КАЖДОЙ строки. Плеер/скролл (state.lastLayout)
     // используют rowH2 и сдвинутый margin, поэтому playhead остаётся на стане.
-    const toppad = vpad + tpad;
+    const toppad = vpad + tpad + npad;
     const rowH2 = rowH + toppad;
     const totalH = rows * rowH2 + 2 * margin;
     renderer.resize(width, totalH);
@@ -358,6 +363,20 @@ export function render(score, forcedWidth) {
             if (hb) return hb.x;
         }
         return g.x + 2; // fallback — левый край такта
+    }
+
+    // Навигация — отдельным проходом НАД темпом/вольтами (rowTopY - vpad - tpad).
+    if (navMarks.length) {
+        drawNavigation({
+            VF: VF,
+            marks: navMarks,
+            rowOf: function (mi) { return geom[mi] ? geom[mi].row : null; },
+            baselineOf: function (r) {
+                return rowTopY[r] == null ? null : rowTopY[r] - vpad - tpad - 8;
+            },
+            boxOf: function (mi) { return geom[mi] ? { x: geom[mi].x, w: geom[mi].w } : null; },
+            ctxOf: function () { return ctx; },
+        });
     }
 
     // Подсветка выделения при наборе лиги фразировки (slur).

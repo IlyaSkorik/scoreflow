@@ -23,6 +23,7 @@ import { readTempoMarks } from '../domain/tempo.js';
 import { setupBarline, drawCustomBarline, drawGrandBarline } from './barlines.js';
 import { drawVoltasInBand, voltaHeadroom } from './voltas.js';
 import { drawTempos, tempoHeadroom } from './tempo.js';
+import { drawNavigation, navigationHeadroom, readNavigation } from './navigation.js';
 import { drawDynamic } from './dynamics.js';
 import { dynamicsBaseline } from './dynamics_layout.js';
 import { noteOnsets, indexAtBeat, readHairpins } from '../domain/dynamics.js';
@@ -129,10 +130,10 @@ function drawTitle(ctx, title, composer) {
 // последующего прохода лиг (Tie/Slur), общий на всю печать.
 function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
                     effKeys, bars, sysIndex, registry, staveReg, voltas, vpad,
-                    tempoMarks, tpad) {
+                    tempoMarks, tpad, navMarks, npad) {
     let x = PAGE.mx;
-    // Станы опускаем на vpad+tpad — над ними место под вольты и темповые метки.
-    const staveY = yTop + (vpad || 0) + (tpad || 0);
+    // Станы опускаем на vpad+tpad+npad — над ними вольты, темп и навигация.
+    const staveY = yTop + (vpad || 0) + (tpad || 0) + (npad || 0);
     // Боксы тактов {x,w} и Y верхней линейки — для прохода вольт/темпа системы.
     const voltaBoxes = {};
     let bandTopY = null;
@@ -310,6 +311,20 @@ function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
             },
         });
     }
+
+    // Навигация этой системы — общим с экраном кодом (render/navigation), НАД
+    // темпом/вольтами (bandTopY - vpad - tpad - зазор).
+    if (navMarks && navMarks.length && bandTopY != null) {
+        const sysNav = navMarks.filter(function (m) { return voltaBoxes[m.measure]; });
+        drawNavigation({
+            VF: VF,
+            marks: sysNav,
+            rowOf: function () { return 0; },
+            baselineOf: function () { return bandTopY - (vpad || 0) - (tpad || 0) - 8; },
+            boxOf: function (mi) { return voltaBoxes[mi] || null; },
+            ctxOf: function () { return ctx; },
+        });
+    }
 }
 
 // Главный вход постраничной вёрстки: строит страницы A4 в #print-root,
@@ -342,6 +357,10 @@ export function renderPrintPages(score) {
     // со экраном кодом (render/tempo). Живут НАД вольтами (доп. headroom tpad).
     const tempoMarks = readTempoMarks(measures);
     const tpad = tempoHeadroom(tempoMarks);
+    // Навигация — единое разрешение (render/navigation), общим с экраном кодом.
+    // Стоит НАД темпом/вольтами (доп. headroom npad).
+    const navMarks = readNavigation(measures);
+    const npad = navigationHeadroom(navMarks);
     if (measures.length === 0) return 0;
     // Смена тональности / размера на такте i>0 (для ширины и отрисовки в
     // середине системы). Размер на такте 0 — голова первой системы.
@@ -429,8 +448,8 @@ export function renderPrintPages(score) {
 
     // --- проход 4: страничная раскладка (вертикальный justify) ---
     const Hh = printH();
-    // Высота системы включает headroom вольт и темпа (метки над станом).
-    const sysH = cfg.systemHeight + vpad + tpad;
+    // Высота системы включает headroom вольт, темпа и навигации (над станом).
+    const sysH = cfg.systemHeight + vpad + tpad + npad;
     const perPage = Math.max(1,
         Math.floor((Hh + SYS_GAP_MIN) / (sysH + SYS_GAP_MIN)));
     const pages = [];
@@ -472,7 +491,7 @@ export function renderPrintPages(score) {
         for (let k = 0; k < n; k++) {
             drawSystem(VF, ctx, pageSystems[k], measures, cfg, y,
                 effTs, tsStr, effKeys, bars, sysGi, printObjs, printStaves,
-                voltas, vpad, tempoMarks, tpad);
+                voltas, vpad, tempoMarks, tpad, navMarks, npad);
             sysGi++;
             y += sysH + gap;
         }
