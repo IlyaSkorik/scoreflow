@@ -124,6 +124,16 @@ export function render(score, forcedWidth) {
     // отрисовка общим с печатью кодом. Стоит НАД темпом/вольтами (доп. npad).
     const navMarks = readNavigation(measures);
     const npad = navigationHeadroom(navMarks);
+    // Пофактовое размещение верхних меток: символ поднимается над станом ТОЛЬКО
+    // на высоту тех слоёв, что РЕАЛЬНО стоят над ЭТИМ тактом (вольта/темп), а не
+    // глобально. Такты воль/темпа — для стекинга (иначе минимальный отступ).
+    const voltaMeasures = {};
+    for (let s = 0; s < voltas.length; s++) {
+        for (let mi = voltas[s].start; mi <= voltas[s].end; mi++) voltaMeasures[mi] = true;
+    }
+    const tempoMeasures = {};
+    for (let t = 0; t < tempoMarks.length; t++) tempoMeasures[tempoMarks[t].measure] = true;
+    const MARK_GAP = 8; // минимальный зазор верхней метки над станом
 
     // Реальная ширина «головы» стана по ФАКТИЧЕСКИМ начальным модификаторам
     // (ключ [+ тональность с бекарами-отменой] [+ размер]), через getNoteStartX
@@ -345,8 +355,10 @@ export function render(score, forcedWidth) {
             VF: VF,
             marks: tempoMarks,
             rowOf: function (mi) { return geom[mi] ? geom[mi].row : null; },
-            baselineOf: function (r) {
-                return rowTopY[r] == null ? null : rowTopY[r] - vpad - 8;
+            baselineOf: function (r, mi) {
+                if (rowTopY[r] == null) return null;
+                // Над темпом поднимаемся, только если на ЭТОМ такте есть вольта.
+                return rowTopY[r] - (voltaMeasures[mi] ? vpad : 0) - MARK_GAP;
             },
             ctxOf: function () { return ctx; },
             xOf: function (mi, beat) { return tempoXAtBeat(mi, primary, beat); },
@@ -371,8 +383,12 @@ export function render(score, forcedWidth) {
             VF: VF,
             marks: navMarks,
             rowOf: function (mi) { return geom[mi] ? geom[mi].row : null; },
-            baselineOf: function (r) {
-                return rowTopY[r] == null ? null : rowTopY[r] - vpad - tpad - 8;
+            baselineOf: function (r, mi) {
+                if (rowTopY[r] == null) return null;
+                // Навигация — над вольтой И над темпом ЭТОГО такта, если они есть.
+                return rowTopY[r]
+                    - (voltaMeasures[mi] ? vpad : 0)
+                    - (tempoMeasures[mi] ? tpad : 0) - MARK_GAP;
             },
             boxOf: function (mi) { return geom[mi] ? { x: geom[mi].x, w: geom[mi].w } : null; },
             ctxOf: function () { return ctx; },

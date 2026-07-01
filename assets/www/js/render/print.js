@@ -288,6 +288,18 @@ function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
     // Темповые метки этой системы — общим со экраном кодом (render/tempo), НАД
     // вольтами (bandTopY - vpad - зазор). X доли — из позиции ноты (реестр),
     // иначе левый край такта. Рисуем только метки тактов этой системы.
+    // Пофактовое размещение: верхняя метка поднимается над станом ТОЛЬКО на
+    // высоту слоёв, реально стоящих над ЭТИМ тактом (вольта/темп), не глобально.
+    const voltaMeasures = {};
+    if (voltas) {
+        for (let s = 0; s < voltas.length; s++) {
+            for (let mi = voltas[s].start; mi <= voltas[s].end; mi++) voltaMeasures[mi] = true;
+        }
+    }
+    const tempoMeasures = {};
+    if (tempoMarks) {
+        for (let t = 0; t < tempoMarks.length; t++) tempoMeasures[tempoMarks[t].measure] = true;
+    }
     if (tempoMarks && tempoMarks.length && bandTopY != null) {
         const voices = cfg.staves.map(function (st) { return st.voice; });
         const primary = voices[0];
@@ -296,7 +308,9 @@ function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
             VF: VF,
             marks: sysMarks,
             rowOf: function () { return 0; },
-            baselineOf: function () { return bandTopY - (vpad || 0) - 8; },
+            baselineOf: function (r, mi) {
+                return bandTopY - (voltaMeasures[mi] ? (vpad || 0) : 0) - 8;
+            },
             ctxOf: function () { return ctx; },
             xOf: function (mi, beat) {
                 const notes = (measures[mi] && measures[mi][primary]) || [];
@@ -320,7 +334,10 @@ function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
             VF: VF,
             marks: sysNav,
             rowOf: function () { return 0; },
-            baselineOf: function () { return bandTopY - (vpad || 0) - (tpad || 0) - 8; },
+            baselineOf: function (r, mi) {
+                return bandTopY - (voltaMeasures[mi] ? (vpad || 0) : 0)
+                    - (tempoMeasures[mi] ? (tpad || 0) : 0) - 8;
+            },
             boxOf: function (mi) { return voltaBoxes[mi] || null; },
             ctxOf: function () { return ctx; },
         });

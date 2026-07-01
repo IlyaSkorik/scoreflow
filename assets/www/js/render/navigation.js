@@ -71,17 +71,17 @@ export function drawNavigationMark(VF, ctx, id, xLeft, xRight, y) {
 
 // Отрисовать все навигационные символы. [spec] — аксессоры пайплайна:
 //   VF, marks : [{ measure, id }]
-//   rowOf(mi)        : строка/система такта (или null)
-//   baselineOf(row)  : Y базовой линии символа (или null)
-//   boxOf(mi)        : { x, w } такта (левый край и ширина) или null
-//   ctxOf(row)       : графический контекст строки/системы
+//   rowOf(mi)          : строка/система такта (или null)
+//   baselineOf(row,mi) : Y базовой линии символа (пофактовое; или null)
+//   boxOf(mi)          : { x, w } такта (левый край и ширина) или null
+//   ctxOf(row)         : графический контекст строки/системы
 export function drawNavigation(spec) {
     const marks = spec.marks || [];
     for (let i = 0; i < marks.length; i++) {
         const m = marks[i];
         const r = spec.rowOf(m.measure);
         if (r == null) continue;
-        const y = spec.baselineOf(r);
+        const y = spec.baselineOf(r, m.measure);
         if (y == null) continue;
         const box = spec.boxOf(m.measure);
         if (!box) continue;

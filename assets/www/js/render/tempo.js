@@ -52,17 +52,18 @@ export function drawTempoMark(VF, ctx, x, y, bpm) {
 
 // Отрисовать все темповые метки. [spec] — аксессоры пайплайна:
 //   VF, marks : [{ measure, beat, bpm, unit }]
-//   rowOf(mi)        : строка/система такта (или null)
-//   baselineOf(row)  : Y базовой линии метки в строке (или null)
-//   xOf(mi, beat)    : X позиции доли (или null)
-//   ctxOf(row)       : графический контекст строки/системы
+//   rowOf(mi)          : строка/система такта (или null)
+//   baselineOf(row,mi) : Y базовой линии метки (пофактовое — зависит от того,
+//                        что реально стоит НАД этим тактом; или null)
+//   xOf(mi, beat)      : X позиции доли (или null)
+//   ctxOf(row)         : графический контекст строки/системы
 export function drawTempos(spec) {
     const marks = spec.marks || [];
     for (let i = 0; i < marks.length; i++) {
         const m = marks[i];
         const r = spec.rowOf(m.measure);
         if (r == null) continue;
-        const y = spec.baselineOf(r);
+        const y = spec.baselineOf(r, m.measure);
         if (y == null) continue;
         const ctx = spec.ctxOf(r);
         if (!ctx) continue;
