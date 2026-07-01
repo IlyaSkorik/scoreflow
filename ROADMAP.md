@@ -4,10 +4,10 @@
 > against the actual codebase, not aspirations.
 >
 > Last reviewed: **2026-07-01** · Flutter 3.44.3 · Material 3 · VexFlow 4.2.2 · ES Modules.
-> Latest: professional Hairpin System (crescendo / diminuendo — first-class
-> range-anchored notation object extending the Dynamics architecture; velocity
-> interpolation resolved once inside the compiler's `velocityAt`, shared
-> screen/PDF wedge engraving, time-anchored reflow; scheduler stays unaware).
+> Latest: professional Articulations System (staccato / staccatissimo / accent /
+> marcato / tenuto — first-class per-note marks; the final expressive layer in
+> the compiler modifies the PlaybackEvent after dynamics/hairpins, shared
+> screen/PDF engraving opposite the stem; scheduler stays notation-agnostic).
 
 ---
 
@@ -209,6 +209,20 @@ Secondary goals:
   * Undo / Redo, serialization, legacy loading, autosave
   * Time-anchored reflow (re-anchored by absolute beat, like dynamics)
   * Future-ready for niente, custom wedges, expression, playback curves
+* [x] Professional Articulations System
+
+  * Staccato / Staccatissimo / Accent / Marcato / Tenuto
+  * First-class per-note articulation (list on the note — multiple per note)
+  * Extends the playback compiler — the final expressive layer after dynamics/hairpins
+  * Compiler modifies the PlaybackEvent (duration, velocity, attack, release)
+  * Effect constants in one place (`domain/articulations`); no duplicated rules
+  * Scheduler stays notation-agnostic (reads the same duration/velocity)
+  * Professional engraving via VexFlow, placed opposite the stem
+  * Chords, grand staff, drum notation supported
+  * Shared screen/PDF rendering (`buildVoice`, visually identical)
+  * Editor tool (toggle / multiple / remove), Undo / Redo, autosave
+  * Serialization, legacy loading; articulations stay attached to their note through reflow
+  * Future-ready for fermata, breath mark, caesura and humanized attack/release
 
 ---
 
@@ -230,6 +244,7 @@ Secondary goals:
 * [x] Compiler-resolved repeats
 * [x] Compiler-resolved voltas
 * [x] Compiler-resolved hairpins (velocity interpolation)
+* [x] Compiler-resolved articulations (duration / velocity / attack)
 * [x] Shared perceptual velocity curve
 * [x] Unified velocity → gain pipeline
 
@@ -258,6 +273,7 @@ Secondary goals:
 * [x] Repeat editor
 * [x] Volta editor
 * [x] Hairpin editor
+* [x] Articulation editor
 * [x] Score library
 
   * Create
@@ -317,13 +333,13 @@ Secondary goals:
 
 ### Articulations
 
-* [ ] Staccato
-* [ ] Accent
-* [ ] Tenuto
-* [ ] Marcato
-* [ ] Staccatissimo
+> Builds on the completed **Professional Articulations System** (staccato,
+> staccatissimo, accent, marcato, tenuto). Remaining marks are new entries in the
+> same `ARTICULATION_SPEC` — no redesign.
+
 * [ ] Fermata
-* [ ] Playback support
+* [ ] Breath mark
+* [ ] Caesura
 
 ---
 
