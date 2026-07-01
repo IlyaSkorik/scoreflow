@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>widths</title>
+    <!-- Отладочный замер minWidth тактов фикстуры (см. harness.html). -->
+    <script src="/assets/www/js/vexflow.js"></script>
+</head>
+<body>
+    <div id="notation-container"><div id="playhead"></div></div>
+    <div id="out" style="font: 14px monospace; white-space: pre;"></div>
+    <script type="module">
+        import { buildVoice, measureMinWidth } from '/assets/www/js/render/layout.js';
+        const name = new URLSearchParams(location.search).get('fixture') || 'dense';
+        const score = await (await fetch('/test/print/fixtures/' + name + '.json')).json();
+        const VF = Vex.Flow;
+        const lines = [];
+        score.measures.forEach((m, i) => {
+            const vs = ['treble', 'bass'].map((v) =>
+                buildVoice(VF, m[v] || [], v, 4, 4, -1, -1, v));
+            lines.push(i + ': minW=' + Math.round(measureMinWidth(VF, vs)) +
+                ' notes=' + (m.treble || []).length);
+        });
+        document.getElementById('out').textContent = lines.join('\n');
+        document.title = 'done';
+    </script>
+</body>
+</html>

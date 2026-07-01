@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>ScoreFlow Screen Harness</title>
+    <!-- Стенд ЭКРАННОГО рендера (регресс-проверка общих слоёв после правок
+         печати): ?fixture=piano_full. См. harness.html (печатный стенд). -->
+    <script src="/assets/www/js/vexflow.js"></script>
+    <style>
+        body { margin: 0; background: #fff; }
+        #notation-container { position: relative; width: 900px; padding: 8px; }
+    </style>
+</head>
+<body>
+    <div id="notation-container"><div id="playhead"></div></div>
+    <script type="module">
+        import { render } from '/assets/www/js/render/render.js';
+        import { state } from '/assets/www/js/utils/state.js';
+        const name = new URLSearchParams(location.search).get('fixture') || 'piano_full';
+        try {
+            const res = await fetch('/test/print/fixtures/' + name + '.json');
+            const score = await res.json();
+            state.lastPayload = score;
+            render(score);
+            document.title = name + ': screen ok';
+        } catch (e) {
+            document.body.insertAdjacentHTML('afterbegin',
+                '<pre>' + (e.stack || e) + '</pre>');
+        }
+    </script>
+</body>
+</html>

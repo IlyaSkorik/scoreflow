@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>ScoreFlow Print Harness</title>
+    <!-- Визуальный стенд печатного движка: рендерит фикстуру в страницы
+         (?fixture=piano_full) для просмотра/печати в PDF headless-браузером.
+         CSS страниц зеркалит index.html (@media print). Запуск:
+           node test/print/serve.mjs   # статический сервер репозитория
+           msedge --headless --print-to-pdf=out.pdf \
+             "http://localhost:8123/test/print/harness.html?fixture=piano_full"
+    -->
+    <script src="/assets/www/js/vexflow.js"></script>
+    <style>
+        body { margin: 0; background: #777; }
+        #notation-container { display: none; }
+        .pf-page {
+            width: 794px;
+            height: 1123px;
+            position: relative;
+            margin: 8px auto;
+            background: #ffffff;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,.4);
+        }
+        @media print {
+            @page { size: A4; margin: 0; }
+            html, body { background: #ffffff; }
+            .pf-page {
+                margin: 0;
+                box-shadow: none;
+                page-break-after: always;
+                break-after: page;
+            }
+            .pf-page:last-child { page-break-after: auto; break-after: auto; }
+        }
+    </style>
+</head>
+<body>
+    <div id="notation-container"><div id="playhead"></div></div>
+    <div id="print-root"></div>
+    <script type="module">
+        import { renderPrintPages } from '/assets/www/js/render/print.js';
+        const name = new URLSearchParams(location.search).get('fixture') || 'piano_full';
+        try {
+            const res = await fetch('/test/print/fixtures/' + name + '.json');
+            const score = await res.json();
+            const pages = renderPrintPages(score);
+            document.title = name + ': ' + pages + ' pages';
+            window.__pages = pages;
+        } catch (e) {
+            document.body.insertAdjacentHTML('afterbegin',
+                '<pre style="color:#fff">' + (e.stack || e) + '</pre>');
+            window.__pages = -1;
+        }
+    </script>
+</body>
+</html>

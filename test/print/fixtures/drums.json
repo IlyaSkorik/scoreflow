@@ -1,0 +1,1792 @@
+{
+ "title": "Групповой этюд",
+ "composer": "ScoreFlow",
+ "instrument": "drums",
+ "keySignature": "C",
+ "timeSignature": "4/4",
+ "tempo": 104,
+ "measures": [
+  {
+   "perc": [
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    }
+   ],
+   "_repeat": "start",
+   "_tempo": [
+    {
+     "bpm": 104,
+     "beat": 0
+    }
+   ],
+   "_dyn": {
+    "perc": [
+     {
+      "mark": "mf",
+      "beat": 0
+     }
+    ]
+   }
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    }
+   ]
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    }
+   ]
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "e/5"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "d/5"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "a/5"
+     ],
+     "duration": "q",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    }
+   ]
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    }
+   ]
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    }
+   ]
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    }
+   ],
+   "_volta": {
+    "numbers": [
+     1
+    ],
+    "span": 1
+   },
+   "_repeat": "end"
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "e/5"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "d/5"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "a/5"
+     ],
+     "duration": "q",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    }
+   ],
+   "_volta": {
+    "numbers": [
+     2
+    ],
+    "span": 1
+   }
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    }
+   ]
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    }
+   ]
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    }
+   ]
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "e/5"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "d/5"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "a/5"
+     ],
+     "duration": "q",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    }
+   ]
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    }
+   ]
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    }
+   ]
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    }
+   ]
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "e/5"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "d/5"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "a/5"
+     ],
+     "duration": "q",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    }
+   ],
+   "_dyn": {
+    "perc": [
+     {
+      "mark": "ff",
+      "beat": 0
+     }
+    ]
+   }
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    }
+   ]
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    }
+   ]
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    }
+   ]
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "e/5"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "d/5"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "a/5"
+     ],
+     "duration": "q",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    }
+   ]
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    }
+   ]
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    }
+   ]
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5",
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    },
+    {
+     "keys": [
+      "g/5/x2"
+     ],
+     "duration": "8",
+     "rest": false
+    }
+   ]
+  },
+  {
+   "perc": [
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "e/5"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "d/5"
+     ],
+     "duration": "8",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "c/5"
+     ],
+     "duration": "16",
+     "rest": false
+    },
+    {
+     "keys": [
+      "f/4",
+      "a/5"
+     ],
+     "duration": "q",
+     "rest": false,
+     "art": [
+      "accent"
+     ]
+    }
+   ]
+  }
+ ]
+}
