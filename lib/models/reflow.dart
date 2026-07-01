@@ -85,6 +85,40 @@ void reflowDynamicsVariable(
   }
 }
 
+/// Перепривязывает ВИЛКИ (crescendo/diminuendo) к НОВОЙ раскладке тактов по
+/// АБСОЛЮТНЫМ долям ОБОИХ концов — так же, как [reflowDynamicsVariable] для
+/// оттенков (вилка РАСШИРЯЕТ динамику и живёт в том же музыкальном времени).
+/// Оба конца (начало вилки на её такте-контейнере + [Hairpin.endMeasure]/endBeat)
+/// переводятся в абсолютные четверти по [from], затем раскладываются по [to];
+/// вилка кладётся на новый такт-начало с пересчитанными долями и endMeasure.
+/// Смены размера — позиционные якоря по индексу, поэтому одна [measureQAt]
+/// описывает и старую, и новую раскладку.
+void reflowHairpinsVariable(
+    List<Measure> from, List<Measure> to, double Function(int) measureQAt) {
+  for (final m in to) {
+    m.hairpins.clear();
+  }
+  if (to.isEmpty) return;
+  final fromStarts = measureStarts(from.length, measureQAt);
+  final toStarts = measureStarts(to.length, measureQAt);
+  for (var mi = 0; mi < from.length; mi++) {
+    for (final h in from[mi].hairpins) {
+      final em = h.endMeasure < from.length ? h.endMeasure : from.length - 1;
+      final absStart = fromStarts[mi] + h.startBeat;
+      final absEnd = fromStarts[em] + h.endBeat;
+      final ns = measureIndexAtBeat(toStarts, absStart);
+      final ne = measureIndexAtBeat(toStarts, absEnd);
+      to[ns].hairpins.add(Hairpin(
+        type: h.type,
+        voice: h.voice,
+        startBeat: absStart - toStarts[ns],
+        endMeasure: ne,
+        endBeat: absEnd - toStarts[ne],
+      ));
+    }
+  }
+}
+
 /// Перепривязка оттенков при ЕДИНОМ размере по всей партитуре (обратная
 /// совместимость): [measureQ] — четвертей в такте, одинаково для всех тактов.
 /// Тонкая обёртка над [reflowDynamicsVariable] — без дублирования логики.

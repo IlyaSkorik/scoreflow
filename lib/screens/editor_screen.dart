@@ -315,10 +315,11 @@ class _EditorScreenState extends State<EditorScreen> {
         }
       }
     }
-    // Оттенки переезжают вместе с музыкой: перепривязка по абсолютной доле к
-    // новой раскладке (measureQ в четвертях, разный для разных размеров).
+    // Оттенки и вилки переезжают вместе с музыкой: перепривязка по абсолютной
+    // доле к новой раскладке (measureQ в четвертях, разный для разных размеров).
     // Делаем ДО подмены s.measures — источник позиций — прежняя раскладка.
     reflowDynamicsVariable(s.measures, measures, measureQAt);
+    reflowHairpinsVariable(s.measures, measures, measureQAt);
     s.measures = measures;
 
     // вернуть курсор на ту же ноту (или подровнять в границы)
@@ -574,6 +575,83 @@ class _EditorScreenState extends State<EditorScreen> {
         list
           ..add(Dynamic(mark: mark, voice: _cursor.voice, beat: beat))
           ..sort((a, b) => a.beat.compareTo(b.beat));
+      }
+    });
+  }
+
+  // --- Вилки (Hairpin: crescendo/diminuendo) ---------------------------
+
+  /// (m,b) ≤ (m2,b2) лексикографически (такт, затем доля) — для проверки
+  /// покрытия/пересечения диапазонов вилок.
+  bool _leq(int ma, double ba, int mb, double bb) =>
+      ma < mb || (ma == mb && ba <= bb + 1e-6);
+
+  /// Вилка активного голоса, ПОКРЫВАЮЩАЯ позицию курсора, либо null. Нужна для
+  /// снятия (повторный тап инструмента на вилке) и подсветки кнопок.
+  Hairpin? get _cursorHairpin {
+    if (!_cursorOnNote) return null;
+    final v = _cursor.voice;
+    final cm = _cursor.measure;
+    final cb = onsetBeats(_activeVoice, _cursor.index);
+    for (var mi = 0; mi < _score!.measures.length; mi++) {
+      for (final h in _score!.measures[mi].hairpins) {
+        if (h.voice != v) continue;
+        if (_leq(mi, h.startBeat, cm, cb) && _leq(cm, cb, h.endMeasure, h.endBeat)) {
+          return h;
+        }
+      }
+    }
+    return null;
+  }
+
+  bool get _hairpinOnCursor => _cursorHairpin != null;
+
+  /// Инструмент «Вилка» ([type] = crescendo/diminuendo). Если курсор внутри
+  /// вилки — снимаем её. Иначе — механизм выделения диапазона (как slur): первый
+  /// тап ставит якорь, второй (другой конец того же голоса) навешивает вилку.
+  /// Вилка — нотационный объект, РАСШИРЯЮЩИЙ динамику: громкость интерполирует
+  /// playback-компилятор движка (единое место), редактор лишь пишет ЧТО и ГДЕ.
+  void _onHairpin(HairpinType type) {
+    final existing = _cursorHairpin;
+    if (existing != null) {
+      _removeHairpin(existing);
+      return;
+    }
+    if (!_cursorOnNote) return;
+    final r = _consumeSelection();
+    if (r == null) return; // только что поставили якорь — ждём второй конец
+    _applyHairpin(type, r.voice, r.m0, r.i0, r.m1, r.i1);
+  }
+
+  /// Навесить вилку на диапазон одного голоса. Пересекающиеся вилки того же
+  /// голоса убираются (без наложений — как в проф. редакторах). Вилка кладётся на
+  /// такт-НАЧАЛО ([m0]); конец — ([m1], доля ноты [i1]).
+  void _applyHairpin(
+      HairpinType type, String voice, int m0, int i0, int m1, int i1) {
+    _commit(() {
+      final startBeat = onsetBeats(_voiceOf(_score!, m0, voice), i0);
+      final endBeat = onsetBeats(_voiceOf(_score!, m1, voice), i1);
+      for (var mi = 0; mi < _score!.measures.length; mi++) {
+        _score!.measures[mi].hairpins.removeWhere((h) =>
+            h.voice == voice &&
+            _leq(mi, h.startBeat, m1, endBeat) &&
+            _leq(m0, startBeat, h.endMeasure, h.endBeat));
+      }
+      _score!.measures[m0].hairpins.add(Hairpin(
+        type: type,
+        voice: voice,
+        startBeat: startBeat,
+        endMeasure: m1,
+        endBeat: endBeat,
+      ));
+    });
+  }
+
+  /// Снять вилку [h] (поиск по её такту-началу).
+  void _removeHairpin(Hairpin h) {
+    _commit(() {
+      for (final m in _score!.measures) {
+        if (m.hairpins.remove(h)) break;
       }
     });
   }
@@ -1463,6 +1541,9 @@ class _EditorScreenState extends State<EditorScreen> {
             onToggleTie: _toggleTie,
             onToggleSlur: _toggleSlur,
             onTuplet: _onTuplet,
+            hairpinOnCursor: _hairpinOnCursor,
+            onHairpinCresc: () => _onHairpin(HairpinType.crescendo),
+            onHairpinDim: () => _onHairpin(HairpinType.diminuendo),
             onAccidental: _setAccidental,
             onDynamic: _setDynamic,
             onInsert: (keys) => _insertNote(keys: keys),
@@ -1516,6 +1597,9 @@ class _EditorPanel extends StatelessWidget {
   final VoidCallback onToggleTie;
   final VoidCallback onToggleSlur;
   final VoidCallback onTuplet;
+  final bool hairpinOnCursor; // курсор внутри вилки (для подсветки/снятия)
+  final VoidCallback onHairpinCresc;
+  final VoidCallback onHairpinDim;
   final ValueChanged<Accidental> onAccidental;
   final ValueChanged<DynamicMark> onDynamic;
   final ValueChanged<List<String>> onInsert;
@@ -1545,6 +1629,9 @@ class _EditorPanel extends StatelessWidget {
     required this.onToggleTie,
     required this.onToggleSlur,
     required this.onTuplet,
+    required this.hairpinOnCursor,
+    required this.onHairpinCresc,
+    required this.onHairpinDim,
     required this.onAccidental,
     required this.onDynamic,
     required this.onInsert,
@@ -1783,6 +1870,45 @@ class _EditorPanel extends StatelessWidget {
                   tupletOnCursor ? scheme.onSecondaryContainer : null,
             ),
             onPressed: (canLiga || tupletOnCursor) ? onTuplet : null,
+          ),
+          // Crescendo (<) — вилка нарастания. В вилке — снимает; иначе якорь ->
+          // второй конец (как slur). Подсвечена, когда курсор внутри вилки.
+          IconButton(
+            tooltip: hairpinOnCursor
+                ? 'Убрать вилку'
+                : (selArmed
+                    ? 'Крещендо: выберите второй конец'
+                    : 'Крещендо (<)'),
+            isSelected: hairpinOnCursor,
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: tight,
+            icon: const Text('cresc', style: TextStyle(fontSize: 11)),
+            style: IconButton.styleFrom(
+              backgroundColor: hairpinOnCursor ? scheme.secondaryContainer : null,
+              foregroundColor:
+                  hairpinOnCursor ? scheme.onSecondaryContainer : null,
+            ),
+            onPressed: (canLiga || hairpinOnCursor) ? onHairpinCresc : null,
+          ),
+          // Diminuendo (>) — вилка спада. Поведение симметрично крещендо.
+          IconButton(
+            tooltip: hairpinOnCursor
+                ? 'Убрать вилку'
+                : (selArmed
+                    ? 'Диминуэндо: выберите второй конец'
+                    : 'Диминуэндо (>)'),
+            isSelected: hairpinOnCursor,
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            constraints: tight,
+            icon: const Text('dim', style: TextStyle(fontSize: 11)),
+            style: IconButton.styleFrom(
+              backgroundColor: hairpinOnCursor ? scheme.secondaryContainer : null,
+              foregroundColor:
+                  hairpinOnCursor ? scheme.onSecondaryContainer : null,
+            ),
+            onPressed: (canLiga || hairpinOnCursor) ? onHairpinDim : null,
           ),
           IconButton.filledTonal(
             tooltip: 'Пауза',
