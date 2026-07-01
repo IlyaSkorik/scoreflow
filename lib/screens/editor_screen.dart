@@ -29,8 +29,14 @@ const List<String> _timeSignatures = [
 /// Служебное значение пикера размера «Без смены» (убрать смену в такте).
 const String _kInheritTime = '__inherit_ts__';
 
-/// Служебное значение пикера размера «Другой…» (ввод произвольного n/d).
+/// Служебное значение пикера размера: ТЕКУЩИЙ нестандартный размер, показанный
+/// как выбранный пункт («7/16 (своё)»). Отдельно от [_kPickTime], иначе пункт
+/// «своё» и пункт «Другой…» делили бы одно value и DropdownButton бросал бы
+/// assert (в списке допустим ровно один пункт с value == текущему).
 const String _kCustomTime = '__custom_ts__';
+
+/// Служебное значение пункта «Другой…» (действие «ввести произвольный n/d»).
+const String _kPickTime = '__pick_ts__';
 
 /// Служебное значение пикера темпа «Другое…» (ввод произвольного BPM). Отрицат.
 /// sentinel — не пересекается с реальными bpm (20..400).
@@ -1458,13 +1464,13 @@ class _EditorScreenState extends State<EditorScreen> {
                           DropdownMenuItem(
                               value: _kCustomTime, child: Text('$own (своё)')),
                         const DropdownMenuItem(
-                            value: _kCustomTime, child: Text('Другой…')),
+                            value: _kPickTime, child: Text('Другой…')),
                       ],
                       onChanged: (v) async {
-                        if (v == null) return;
+                        if (v == null || v == _kCustomTime) return;
                         if (v == _kInheritTime) {
                           _setMeasureTimeSignature(null);
-                        } else if (v == _kCustomTime) {
+                        } else if (v == _kPickTime) {
                           final custom = await _pickCustomTimeSignature(
                               score.effectiveTimeSignatureAt(m));
                           if (custom != null) {
@@ -2129,7 +2135,10 @@ class _EditorPanel extends StatelessWidget {
             visualDensity: VisualDensity.compact,
             padding: EdgeInsets.zero,
             constraints: tight,
-            icon: const Text('cresc', style: TextStyle(fontSize: 11)),
+            // Символ вилки-крещендо «<» (та же форма, что рисует движок и что в
+            // подсказке) — читается наравне с 24-px иконками соседей строки.
+            icon: const Text('<',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
             style: IconButton.styleFrom(
               backgroundColor: hairpinOnCursor ? scheme.secondaryContainer : null,
               foregroundColor:
@@ -2148,7 +2157,9 @@ class _EditorPanel extends StatelessWidget {
             visualDensity: VisualDensity.compact,
             padding: EdgeInsets.zero,
             constraints: tight,
-            icon: const Text('dim', style: TextStyle(fontSize: 11)),
+            // Символ вилки-диминуэндо «>» — симметрично крещендо, читаемо.
+            icon: const Text('>',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
             style: IconButton.styleFrom(
               backgroundColor: hairpinOnCursor ? scheme.secondaryContainer : null,
               foregroundColor:
