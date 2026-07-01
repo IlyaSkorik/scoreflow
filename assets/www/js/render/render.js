@@ -133,7 +133,17 @@ export function render(score, forcedWidth) {
     }
     const tempoMeasures = {};
     for (let t = 0; t < tempoMarks.length; t++) tempoMeasures[tempoMarks[t].measure] = true;
+    const navMeasures = {};
+    for (let n = 0; n < navMarks.length; n++) navMeasures[navMarks[n].measure] = true;
     const MARK_GAP = 8; // минимальный зазор верхней метки над станом
+    // Верхний отступ, который РЕАЛЬНО нужен над КОНКРЕТНЫМ тактом: слои
+    // вольта→темп→навигация складываются на одном такте (см. baselineOf ниже).
+    // Такт без верхних меток даёт 0 — строка из таких тактов не резервирует зазор.
+    function stackPadOf(mi) {
+        return (voltaMeasures[mi] ? vpad : 0)
+             + (tempoMeasures[mi] ? tpad : 0)
+             + (navMeasures[mi] ? npad : 0);
+    }
 
     // Реальная ширина «головы» стана по ФАКТИЧЕСКИМ начальным модификаторам
     // (ключ [+ тональность с бекарами-отменой] [+ размер]), через getNoteStartX
@@ -189,12 +199,23 @@ export function render(score, forcedWidth) {
         layoutRows.push(items);
     }
     const rows = layoutRows.length;
-    // Полная высота строки с учётом headroom вольт (vpad) и темпа (tpad),
-    // резервируемых сверху КАЖДОЙ строки. Плеер/скролл (state.lastLayout)
-    // используют rowH2 и сдвинутый margin, поэтому playhead остаётся на стане.
-    const toppad = vpad + tpad + npad;
-    const rowH2 = rowH + toppad;
-    const totalH = rows * rowH2 + 2 * margin;
+    // Верхний отступ КАЖДОЙ строки — пофактовый: резервируем ровно столько,
+    // сколько нужно самому высокому «столбику» верхних меток над каким-либо
+    // тактом ИМЕННО этой строки. Строки, над которыми ничего нет, не получают
+    // лишнего зазора (раньше глобальный vpad+tpad+npad раздвигал все системы).
+    const rowStaveTop = new Array(rows); // Y верхней линейки станов строки
+    let accY = margin;
+    for (let r = 0; r < rows; r++) {
+        const items = layoutRows[r];
+        let pad = 0;
+        for (let c = 0; c < items.length; c++) {
+            const p = stackPadOf(items[c]);
+            if (p > pad) pad = p;
+        }
+        rowStaveTop[r] = accY + pad;
+        accY += rowH + pad;
+    }
+    const totalH = accY + margin;
     renderer.resize(width, totalH);
 
     // геометрия каждого такта {row, x, w} — для playhead/скролла
@@ -205,8 +226,9 @@ export function render(score, forcedWidth) {
     // проход 3: распределение ширины по содержимому + отрисовка
     for (let r = 0; r < rows; r++) {
         const items = layoutRows[r];
-        // Стан начинается ниже на toppad — над ним место под вольты и темп.
-        const yTop = margin + r * rowH2 + toppad;
+        // Стан начинается ниже на rowPad[r] — над ним место под вольты/темп/навигацию
+        // ЭТОЙ строки (0, если сверху ничего нет).
+        const yTop = rowStaveTop[r];
         let sumHead = 0, sumE = 0;
         const es = items.map(function (mi, col) {
             const e = cm[mi] + INNER_PAD;
@@ -401,11 +423,12 @@ export function render(score, forcedWidth) {
     // геометрия раскладки — нужна плееру и автоскроллу.
     // geom[i] = {row, x, w}: число тактов в строке переменное, поэтому
     // строку/координаты такта берём отсюда, а не из фиксированного perRow.
-    // rowH/margin отдаём С учётом headroom вольт: playhead и Follow Playback
-    // считают top строки как margin + row*rowH, а стан сдвинут вниз на vpad —
-    // поэтому в state кладём rowH2 и margin+vpad, и playhead остаётся на стане.
-    state.lastLayout = { width: width, totalH: totalH, rowH: rowH2, rows: rows,
-                   geom: geom, margin: margin + toppad };
+    // Строки теперь РАЗНОЙ высоты (пофактовый верхний отступ), поэтому верх стана
+    // каждой строки нельзя вычислить как margin + row*rowH — отдаём готовый массив
+    // rowTops (Y верхней линейки станов строки). rowH — базовая высота стана (без
+    // верхнего отступа) для высоты playhead. Плеер/скролл берут Y строки из rowTops.
+    state.lastLayout = { width: width, totalH: totalH, rowH: rowH, rows: rows,
+                   geom: geom, margin: margin, rowTops: rowStaveTop };
 
     // если идёт воспроизведение — пересобрать события под новую раскладку
     Playback.onRender();

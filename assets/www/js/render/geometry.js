@@ -20,7 +20,10 @@ export function keepCursorInView(cursor, prevY) {
     const g = (mi != null && mi >= 0 && state.lastLayout.geom) ? state.lastLayout.geom[mi] : null;
     if (g) {
         const row = g.row;
-        const rowTop = PAD + state.lastLayout.margin + row * state.lastLayout.rowH;
+        const tops = state.lastLayout.rowTops;
+        const rowTop = PAD + (tops
+            ? tops[row]
+            : state.lastLayout.margin + row * state.lastLayout.rowH);
         const rowBottom = rowTop + state.lastLayout.rowH;
         if (rowTop < y) target = rowTop - 8;
         else if (rowBottom > y + vh) target = rowBottom - vh + 8;

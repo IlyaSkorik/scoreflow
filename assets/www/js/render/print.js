@@ -130,10 +130,12 @@ function drawTitle(ctx, title, composer) {
 // последующего прохода лиг (Tie/Slur), общий на всю печать.
 function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
                     effKeys, bars, sysIndex, registry, staveReg, voltas, vpad,
-                    tempoMarks, tpad, navMarks, npad) {
+                    tempoMarks, tpad, navMarks, npad, sysPad) {
     let x = PAGE.mx;
-    // Станы опускаем на vpad+tpad+npad — над ними вольты, темп и навигация.
-    const staveY = yTop + (vpad || 0) + (tpad || 0) + (npad || 0);
+    // Станы опускаем на ПОФАКТОВЫЙ верхний отступ ЭТОЙ системы (место под вольты,
+    // темп и навигацию её тактов); 0 — если сверху ничего нет. Размеры слоёв
+    // (vpad/tpad/npad) ниже используются лишь для пофактового стекинга меток.
+    const staveY = yTop + (sysPad || 0);
     // Боксы тактов {x,w} и Y верхней линейки — для прохода вольт/темпа системы.
     const voltaBoxes = {};
     let bandTopY = null;
@@ -379,6 +381,32 @@ export function renderPrintPages(score) {
     const navMarks = readNavigation(measures);
     const npad = navigationHeadroom(navMarks);
     if (measures.length === 0) return 0;
+    // Карты тактов с верхними метками — для ПОФАКТОВОГО верхнего отступа системы.
+    // Слои вольта→темп→навигация складываются на ОДНОМ такте (см. baselineOf в
+    // drawSystem); система резервирует высоту самого высокого «столбика» над её
+    // тактами. Системы без верхних меток не раздвигаются (раньше глобальный
+    // vpad+tpad+npad раздвигал все системы одинаково).
+    const voltaMeasuresAll = {};
+    for (let s = 0; s < voltas.length; s++) {
+        for (let mi = voltas[s].start; mi <= voltas[s].end; mi++) voltaMeasuresAll[mi] = true;
+    }
+    const tempoMeasuresAll = {};
+    for (let t = 0; t < tempoMarks.length; t++) tempoMeasuresAll[tempoMarks[t].measure] = true;
+    const navMeasuresAll = {};
+    for (let n = 0; n < navMarks.length; n++) navMeasuresAll[navMarks[n].measure] = true;
+    const stackPadOf = function (mi) {
+        return (voltaMeasuresAll[mi] ? vpad : 0)
+             + (tempoMeasuresAll[mi] ? tpad : 0)
+             + (navMeasuresAll[mi] ? npad : 0);
+    };
+    const systemPadOf = function (sys) {
+        let pad = 0;
+        for (let k = 0; k < sys.items.length; k++) {
+            const p = stackPadOf(sys.items[k]);
+            if (p > pad) pad = p;
+        }
+        return pad;
+    };
     // Смена тональности / размера на такте i>0 (для ширины и отрисовки в
     // середине системы). Размер на такте 0 — голова первой системы.
     const changedAt = function (i) {
@@ -465,13 +493,29 @@ export function renderPrintPages(score) {
 
     // --- проход 4: страничная раскладка (вертикальный justify) ---
     const Hh = printH();
-    // Высота системы включает headroom вольт, темпа и навигации (над станом).
-    const sysH = cfg.systemHeight + vpad + tpad + npad;
-    const perPage = Math.max(1,
-        Math.floor((Hh + SYS_GAP_MIN) / (sysH + SYS_GAP_MIN)));
+    // Высота КАЖДОЙ системы — базовая + её ПОФАКТОВЫЙ верхний отступ (0, если над
+    // тактами системы нет вольт/темпа/навигации). Системы теперь разной высоты.
+    systems.forEach(function (sys) {
+        sys.pad = systemPadOf(sys);
+        sys.height = cfg.systemHeight + sys.pad;
+    });
+    // Жадная упаковка систем по страницам с учётом их РАЗНЫХ высот (раньше был
+    // фиксированный perPage на одинаковую высоту).
     const pages = [];
-    for (let s = 0; s < systems.length; s += perPage) {
-        pages.push(systems.slice(s, s + perPage));
+    {
+        let cur = [];
+        let used = 0;
+        for (let s = 0; s < systems.length; s++) {
+            const need = (cur.length ? SYS_GAP_MIN : 0) + systems[s].height;
+            if (cur.length && used + need > Hh) {
+                pages.push(cur);
+                cur = [];
+                used = 0;
+            }
+            used += (cur.length ? SYS_GAP_MIN : 0) + systems[s].height;
+            cur.push(systems[s]);
+        }
+        if (cur.length) pages.push(cur);
     }
 
     // Реестр нот для прохода лиг: noteId -> {sn, ctx, sys}. Сквозной
@@ -496,9 +540,10 @@ export function renderPrintPages(score) {
         }
         const budgetH = Hh - headOffset;
 
+        const sumH = pageSystems.reduce(function (a, s) { return a + s.height; }, 0);
         let gap;
         if (n > 1 && !isLastPage) {
-            gap = (budgetH - n * sysH) / (n - 1);
+            gap = (budgetH - sumH) / (n - 1);
             gap = Math.max(SYS_GAP_MIN, Math.min(SYS_GAP_MAX, gap));
         } else {
             gap = SYS_GAP_MIN;
@@ -508,9 +553,10 @@ export function renderPrintPages(score) {
         for (let k = 0; k < n; k++) {
             drawSystem(VF, ctx, pageSystems[k], measures, cfg, y,
                 effTs, tsStr, effKeys, bars, sysGi, printObjs, printStaves,
-                voltas, vpad, tempoMarks, tpad, navMarks, npad);
+                voltas, vpad, tempoMarks, tpad, navMarks, npad,
+                pageSystems[k].pad);
             sysGi++;
-            y += sysH + gap;
+            y += pageSystems[k].height + gap;
         }
     }
 

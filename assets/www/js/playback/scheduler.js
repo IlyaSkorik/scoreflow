@@ -267,7 +267,9 @@ export const Playback = {
         const lay = state.lastLayout;
         if (!lay) return;
         const vh = window.innerHeight || document.documentElement.clientHeight;
-        const rowTop = PAD + lay.margin + row * lay.rowH;
+        const rowTop = PAD + (lay.rowTops
+            ? lay.rowTops[row]
+            : lay.margin + row * lay.rowH);
         const target = rowTop - (vh - lay.rowH) / 2; // система по центру
         const docH = Math.max(
             document.documentElement.scrollHeight, document.body.scrollHeight);
@@ -306,10 +308,13 @@ export const Playback = {
             x = a.x + frac * (c.x - a.x);
         }
 
-        const rowH = state.lastLayout ? state.lastLayout.rowH : 200;
-        const margin = state.lastLayout ? state.lastLayout.margin : 8;
+        const lay = state.lastLayout;
+        const rowH = lay ? lay.rowH : 200;
+        const rowTop = lay && lay.rowTops
+            ? lay.rowTops[row]
+            : (lay ? lay.margin : 8) + row * rowH;
         ph.style.left = (PAD + x) + 'px';
-        ph.style.top = (PAD + margin + row * rowH) + 'px';
+        ph.style.top = (PAD + rowTop) + 'px';
         ph.style.height = (rowH - 8) + 'px';
     },
 
