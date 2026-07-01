@@ -579,6 +579,26 @@ class _EditorScreenState extends State<EditorScreen> {
     });
   }
 
+  // --- Артикуляции (staccato/accent/…) ---------------------------------
+
+  /// Артикуляции ноты под курсором (для подсветки активных кнопок). Пусто, если
+  /// курсор не на реальной ноте.
+  Set<Articulation> get _cursorArticulations =>
+      _cursorOnNote ? _activeVoice[_cursor.index].articulations.toSet() : {};
+
+  /// Инструмент «Артикуляция»: переключает знак [a] на ноте под курсором (toggle
+  /// — есть/нет). Несколько совместимых знаков сосуществуют (staccato + accent).
+  /// Артикуляция принадлежит НОТЕ, поэтому переживает reflow вместе с ней;
+  /// влияние на playback считает движок (единое место). Идёт через обычный
+  /// пайплайн (_commit -> normalize -> render -> persist -> Undo/Redo).
+  void _toggleArticulation(Articulation a) {
+    if (!_cursorOnNote) return;
+    _commit(() {
+      final list = _activeVoice[_cursor.index].articulations;
+      if (!list.remove(a)) list.add(a);
+    });
+  }
+
   // --- Вилки (Hairpin: crescendo/diminuendo) ---------------------------
 
   /// (m,b) ≤ (m2,b2) лексикографически (такт, затем доля) — для проверки
@@ -1546,6 +1566,8 @@ class _EditorScreenState extends State<EditorScreen> {
             onHairpinDim: () => _onHairpin(HairpinType.diminuendo),
             onAccidental: _setAccidental,
             onDynamic: _setDynamic,
+            cursorArticulations: _cursorArticulations,
+            onArticulation: _toggleArticulation,
             onInsert: (keys) => _insertNote(keys: keys),
             onRest: () => _insertNote(keys: const [], rest: true),
             onDelete: _deleteAtCursor,
@@ -1602,6 +1624,8 @@ class _EditorPanel extends StatelessWidget {
   final VoidCallback onHairpinDim;
   final ValueChanged<Accidental> onAccidental;
   final ValueChanged<DynamicMark> onDynamic;
+  final Set<Articulation> cursorArticulations; // знаки ноты под курсором
+  final ValueChanged<Articulation> onArticulation;
   final ValueChanged<List<String>> onInsert;
   final VoidCallback onRest;
   final VoidCallback onDelete;
@@ -1634,6 +1658,8 @@ class _EditorPanel extends StatelessWidget {
     required this.onHairpinDim,
     required this.onAccidental,
     required this.onDynamic,
+    required this.cursorArticulations,
+    required this.onArticulation,
     required this.onInsert,
     required this.onRest,
     required this.onDelete,
@@ -1667,6 +1693,9 @@ class _EditorPanel extends StatelessWidget {
               // Зона 2в — динамика (оба инструмента)
               const SizedBox(height: 6),
               _dynamicsRow(context),
+              // Зона 2г — артикуляции (оба инструмента)
+              const SizedBox(height: 6),
+              _articulationRow(context),
               const SizedBox(height: 8),
               // Зона 3 — ввод высоты/инструмента (вся ширина, зона большого пальца)
               SizedBox(
@@ -1976,6 +2005,61 @@ class _EditorPanel extends StatelessWidget {
                           : scheme.onSurface,
                     ),
                     onPressed: canLiga ? () => onAccidental(acc) : null,
+                    child: Tooltip(
+                      message: tip,
+                      child: Text(glyph, style: const TextStyle(fontSize: 18)),
+                    ),
+                  ),
+                );
+              }(),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Зона артикуляций: переключает знак (staccato/staccatissimo/accent/marcato/
+  /// tenuto) на ноте под курсором. Toggle: активный знак подсвечен, повторный тап
+  /// снимает; несколько совместимых знаков сосуществуют. Влияние на playback
+  /// (длительность/громкость/атака) движок считает сам (единое место). Доступно
+  /// обоим инструментам (ударным accent/marcato особенно полезны).
+  Widget _articulationRow(BuildContext context) {
+    const items = <(Articulation, String, String)>[
+      (Articulation.staccato, '𝅭', 'Стаккато'),
+      (Articulation.staccatissimo, '𝆓', 'Стаккатиссимо'),
+      (Articulation.accent, '>', 'Акцент'),
+      (Articulation.marcato, '^', 'Маркато'),
+      (Articulation.tenuto, '–', 'Тенуто'),
+    ];
+    final scheme = Theme.of(context).colorScheme;
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(right: 6, left: 2),
+            child: Text('Штрих',
+                style: Theme.of(context).textTheme.labelMedium),
+          ),
+          for (final (art, glyph, tip) in items)
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: () {
+                final active = cursorArticulations.contains(art);
+                return SizedBox(
+                  height: 38,
+                  child: TextButton(
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      minimumSize: const Size(34, 38),
+                      backgroundColor:
+                          active ? scheme.secondaryContainer : null,
+                      foregroundColor: active
+                          ? scheme.onSecondaryContainer
+                          : scheme.onSurface,
+                    ),
+                    onPressed: canLiga ? () => onArticulation(art) : null,
                     child: Tooltip(
                       message: tip,
                       child: Text(glyph, style: const TextStyle(fontSize: 18)),
