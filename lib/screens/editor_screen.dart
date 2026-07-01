@@ -98,6 +98,7 @@ class _EditorScreenState extends State<EditorScreen> {
   bool _metronome = false;
   bool _sustain = false;
   bool _follow = true; // Vertical Follow Playback (по умолчанию вкл.)
+  int? _liveTempo; // действующий темп под плейхедом во время игры (иначе null)
 
   @override
   void initState() {
@@ -973,7 +974,10 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   void _togglePlay() {
-    setState(() => _isPlaying = !_isPlaying);
+    setState(() {
+      _isPlaying = !_isPlaying;
+      if (!_isPlaying) _liveTempo = null; // на паузе — показ начального темпа
+    });
     _sendPlayback(_isPlaying ? 'PLAY' : 'PAUSE');
   }
 
@@ -1067,6 +1071,19 @@ class _EditorScreenState extends State<EditorScreen> {
   void _setTempo(int v) {
     _commit(() => _score!.tempo = v);
     if (_isPlaying) _sendPlayback('PLAY');
+  }
+
+  /// Начальный темп пьесы (на такте 0, доля 0). Это ЕДИНЫЙ источник: [Score.tempo]
+  /// — неявная метка темпа в начале. На случай партитуры с явной меткой `_tempo`
+  /// в (0,0) (напр. импорт) читаем её; иначе — [Score.tempo]. Показывается в
+  /// нижнем чипе, когда воспроизведение не идёт.
+  int get _effectiveInitialTempo {
+    if (_score!.measures.isNotEmpty) {
+      for (final t in _score!.measures.first.tempos) {
+        if (t.beat.abs() < 1e-6) return t.bpm;
+      }
+    }
+    return _score!.tempo;
   }
 
   /// Инструмент «Тональность» — вставка/смена/удаление тональности С НАЧАЛА
@@ -1194,8 +1211,15 @@ class _EditorScreenState extends State<EditorScreen> {
   double get _cursorBeat =>
       _cursorOnNote ? onsetBeats(_activeVoice, _cursor.index) : 0.0;
 
-  /// Смена темпа на позиции курсора (такт + доля), либо null.
+  /// Позиция курсора — самое НАЧАЛО пьесы (такт 0, доля 0). Там темп — это
+  /// [Score.tempo] (неявная начальная метка), а не объект `_tempo`.
+  bool get _cursorAtStart => _cursor.measure == 0 && _cursorBeat.abs() < 1e-6;
+
+  /// Смена темпа на позиции курсора (такт + доля), либо null. В начале пьесы
+  /// возвращает НАЧАЛЬНЫЙ темп ([Score.tempo]) как синтетическую метку — единый
+  /// источник, без дубля score.tempo и `_tempo` в (0,0).
   TempoMark? get _cursorTempo {
+    if (_cursorAtStart) return TempoMark(bpm: _score!.tempo);
     final list = _score!.measures[_cursor.measure].tempos;
     for (final t in list) {
       if ((t.beat - _cursorBeat).abs() < 1e-6) return t;
@@ -1204,11 +1228,17 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   /// Инструмент «Темп»: вставка/замена/снятие смены темпа на позиции курсора.
-  /// [bpm]==null — снять. Смена темпа — нотационный объект на ритмической
-  /// позиции; playback-время из неё строит движок (единый tempo map),
-  /// scheduler темп не считает. Идёт через обычный пайплайн (_commit ->
-  /// normalize -> render -> persist -> Undo/Redo); переживает reflow по времени.
+  /// [bpm]==null — снять. В НАЧАЛЕ пьесы (такт 0, доля 0) правит [Score.tempo]
+  /// (единый источник начального темпа — не создаём отдельный `_tempo` в (0,0),
+  /// поэтому нижний чип и метка не расходятся); снять начальный темп нельзя.
+  /// В остальных позициях — объект `_tempo`. playback-время из меток строит
+  /// движок (единый tempo map), scheduler темп не считает. Обычный пайплайн
+  /// (_commit -> normalize -> render -> persist -> Undo/Redo); reflow по времени.
   void _setTempoMark(int? bpm) {
+    if (_cursorAtStart) {
+      if (bpm != null) _setTempo(bpm); // начальный темп = score.tempo
+      return;
+    }
     final m = _cursor.measure;
     final beat = _cursorBeat;
     _commit(() {
@@ -1285,7 +1315,8 @@ class _EditorScreenState extends State<EditorScreen> {
                 ListTile(
                   contentPadding: const EdgeInsets.symmetric(horizontal: 8),
                   leading: const Icon(Icons.speed),
-                  title: const Text('Темп'),
+                  title: const Text('Начальный темп'),
+                  subtitle: const Text('Темп в начале пьесы; смены — инструментом «Темп»'),
                   trailing: Text('${score.tempo} BPM',
                       style: const TextStyle(fontWeight: FontWeight.bold)),
                 ),
@@ -1636,7 +1667,22 @@ class _EditorScreenState extends State<EditorScreen> {
                     handlerName: 'onPlaybackEnded',
                     callback: (args) {
                       if (mounted && _isPlaying) {
-                        setState(() => _isPlaying = false);
+                        setState(() {
+                          _isPlaying = false;
+                          _liveTempo = null; // вернуть показ начального темпа
+                        });
+                      }
+                    },
+                  );
+                  // Движок сообщает ДЕЙСТВУЮЩИЙ темп под плейхедом (смены `_tempo`).
+                  // Чип темпа «привязан к партитуре»: во время игры показывает его.
+                  c.addJavaScriptHandler(
+                    handlerName: 'onTempo',
+                    callback: (args) {
+                      if (!mounted || args.isEmpty) return;
+                      final bpm = (args.first as num?)?.toInt();
+                      if (bpm != null && _isPlaying && bpm != _liveTempo) {
+                        setState(() => _liveTempo = bpm);
                       }
                     },
                   );
@@ -1690,7 +1736,10 @@ class _EditorScreenState extends State<EditorScreen> {
         ],
       ),
       bottomNavigationBar: _PlaybackBar(
-        tempo: score.tempo,
+        // Чип темпа привязан к партитуре: во время игры — действующий темп под
+        // плейхедом (_liveTempo), иначе — начальный темп пьесы.
+        tempo: _liveTempo ?? _effectiveInitialTempo,
+        tempoLive: _liveTempo != null,
         isPlaying: _isPlaying,
         metronomeOn: _metronome,
         followOn: _follow,
@@ -2430,6 +2479,7 @@ class _DrumPad extends StatelessWidget {
 // большого пальца; гаснут (disabled), когда стек пуст.
 class _PlaybackBar extends StatelessWidget {
   final int tempo;
+  final bool tempoLive; // темп идёт от партитуры под плейхедом (во время игры)
   final bool isPlaying;
   final bool metronomeOn;
   final bool followOn;
@@ -2445,6 +2495,7 @@ class _PlaybackBar extends StatelessWidget {
 
   const _PlaybackBar({
     required this.tempo,
+    this.tempoLive = false,
     required this.isPlaying,
     required this.metronomeOn,
     required this.followOn,
@@ -2506,11 +2557,16 @@ class _PlaybackBar extends StatelessWidget {
             onPressed: onToggleFollow,
           ),
           const Spacer(),
-          // Темп — компактный чип-читалка; тап открывает лист «Ещё» (слайдер).
-          // Без иконки-аватара: символ ♩ сам обозначает темп, экономит ширину.
+          // Темп — компактный чип-читалка ДЕЙСТВУЮЩЕГО темпа партитуры. Во время
+          // игры показывает темп под плейхедом (tempoLive, подсвечен), иначе —
+          // начальный темп пьесы. Тап открывает лист «Ещё» (ползунок начального
+          // темпа). Символ ♩ сам обозначает темп — иконка-аватар не нужна.
           ActionChip(
             visualDensity: VisualDensity.compact,
             label: Text('♩=$tempo'),
+            backgroundColor: tempoLive
+                ? Theme.of(context).colorScheme.primaryContainer
+                : null,
             onPressed: onTempoTap,
           ),
           IconButton(

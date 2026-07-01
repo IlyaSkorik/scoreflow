@@ -120,6 +120,17 @@ void main() {
       expect(count, 1);
     });
 
+    test('score.tempo is the implicit initial tempo (single source)', () {
+      // Начальный темп пьесы = Score.tempo; отдельной метки `_tempo` в (0,0) нет.
+      final s = scoreWith([measure(tempos: [const TempoMark(bpm: 60, beat: 2)])]);
+      s.tempo = 90;
+      final back = Score.decode(s.encode());
+      expect(back.tempo, 90); // начальный темп
+      // В такте 0 только СЕРЕДИННАЯ смена (доля 2), не начало.
+      expect(back.measures[0].tempos.map((t) => t.beat).toList(), [2.0]);
+      expect(back.measures[0].tempos.any((t) => t.beat == 0), isFalse);
+    });
+
     test('mid-measure tempo keeps its musical position', () {
       // from: 2 measures; tempo at measure 1 beat 2 (abs 6).
       final from = [

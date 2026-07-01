@@ -41,6 +41,7 @@ export const Playback = {
     followPlayback: true,// Vertical Follow: скролл к новой системе
     _followRow: -1,      // строка, к которой последний раз скроллили
     _hl: {},             // активные элементы подсветки по noteId
+    _lastTempo: -1,      // последний отправленный во Flutter действующий bpm
 
     isPlaying: function () { return this.playing; },
     setMetronome: function (on) { this.metronome = !!on; },
@@ -152,6 +153,7 @@ export const Playback = {
         this.nextEvent = 0;
         this.nextClick = 0;
         this._followRow = -1; // первая смена системы вызовет скролл
+        this._lastTempo = -1; // первый кадр отправит действующий темп
         this.startTime = ctx.currentTime + 0.08; // запас на планирование
         el('playhead').classList.add('active');
         const self = this;
@@ -211,12 +213,31 @@ export const Playback = {
         }
     },
 
+    // Действующий темп (quarter-bpm) на доле [beat] из tempo map компилятора:
+    // bpm = 60/spq активного сегмента. Единый источник — карта темпа, не пересчёт.
+    _reportTempo: function (beat) {
+        if (!this.comp || !this.comp.tempoMap) return;
+        const a = this.comp.tempoMap.anchors || [];
+        let spq = a.length ? a[0].spq : 0.5;
+        for (let i = 0; i < a.length; i++) {
+            if (a[i].beat <= beat + 1e-6) spq = a[i].spq; else break;
+        }
+        const bpm = Math.round(60 / spq);
+        if (bpm !== this._lastTempo) {
+            this._lastTempo = bpm;
+            if (window.flutter_inappwebview) {
+                window.flutter_inappwebview.callHandler('onTempo', bpm);
+            }
+        }
+    },
+
     _frame: function () {
         if (!this.playing) return;
         const curBeat = this.currentBeat();
         this._positionPlayhead(curBeat);
         this._highlight(curBeat);
         this._followScroll(this._rowForBeat(curBeat));
+        this._reportTempo(curBeat); // live-темп во Flutter (чип «внизу»)
         const self = this;
         this.raf = requestAnimationFrame(function () { self._frame(); });
     },
