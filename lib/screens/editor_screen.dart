@@ -67,6 +67,22 @@ const Map<int?, String> _voltaLabels = {
   2: '2-я концовка',
 };
 
+/// Навигационные символы редактора: значение -> подпись. Порядок = порядок в
+/// выпадающем списке (якоря, затем переходы). null — снять символ.
+const Map<NavigationMark?, String> _navLabels = {
+  null: 'Нет',
+  NavigationMark.segno: 'Segno 𝄋',
+  NavigationMark.coda: 'Coda 𝄌',
+  NavigationMark.toCoda: 'To Coda',
+  NavigationMark.fine: 'Fine',
+  NavigationMark.daCapo: 'D.C.',
+  NavigationMark.daCapoAlFine: 'D.C. al Fine',
+  NavigationMark.daCapoAlCoda: 'D.C. al Coda',
+  NavigationMark.dalSegno: 'D.S.',
+  NavigationMark.dalSegnoAlFine: 'D.S. al Fine',
+  NavigationMark.dalSegnoAlCoda: 'D.S. al Coda',
+};
+
 /// Редактор партитуры: WebView-рендер (VexFlow) + панель ввода нот + плеер.
 class EditorScreen extends StatefulWidget {
   final String scoreId;
@@ -253,6 +269,7 @@ class _EditorScreenState extends State<EditorScreen> {
     final barByIndex = s.measures.map((m) => m.barline).toList();
     final repeatByIndex = s.measures.map((m) => m.repeat).toList();
     final voltaByIndex = s.measures.map((m) => m.volta).toList();
+    final navByIndex = s.measures.map((m) => m.navigation).toList();
 
     // ДЕЙСТВУЮЩИЙ размер такта по индексу — ЕДИНЫЙ источник ёмкости. Смены
     // размера позиционны (по индексу), поэтому одна функция описывает и старую,
@@ -300,6 +317,7 @@ class _EditorScreenState extends State<EditorScreen> {
         barline: i < barByIndex.length ? barByIndex[i] : null,
         repeat: i < repeatByIndex.length ? repeatByIndex[i] : null,
         volta: i < voltaByIndex.length ? voltaByIndex[i] : null,
+        navigation: i < navByIndex.length ? navByIndex[i] : null,
       ));
     }
 
@@ -1204,6 +1222,19 @@ class _EditorScreenState extends State<EditorScreen> {
     });
   }
 
+  /// Инструмент «Навигация» — установка/замена/снятие символа (Segno/Coda/D.C./
+  /// D.S./Fine/To Coda) на текущем такте. [mark]==null — снять. Отдельный слой от
+  /// репризы/черты: renderer рисует символ над станом, playback-компилятор
+  /// (domain/navigation) разворачивает порядок, scheduler остаётся простым. Идёт
+  /// через обычный пайплайн (_commit -> normalize -> render -> persist ->
+  /// Undo/Redo); позиционный якорь по номеру такта (переживает reflow).
+  void _setNavigation(NavigationMark? mark) {
+    final m = _cursor.measure;
+    _commit(() {
+      _score!.measures[m].navigation = mark;
+    });
+  }
+
   // --- Смена темпа (♩ = N) ---------------------------------------------
 
   /// Доля курсора внутри такта (четверти): онсет ноты под курсором, иначе 0
@@ -1519,6 +1550,30 @@ class _EditorScreenState extends State<EditorScreen> {
                       ],
                       onChanged: (v) {
                         _setMeasureVolta(v);
+                        setSheet(() {});
+                      },
+                    ),
+                  );
+                }),
+                // Навигация — контекстно к ТАКТУ под курсором: Segno/Coda/D.C./
+                // D.S./Fine/To Coda. Определяет порядок воспроизведения (движок),
+                // символ рисуется над станом. Undo/Redo и автосейв — как всё.
+                Builder(builder: (ctx) {
+                  final m = _cursor.measure;
+                  final cur = score.measures[m].navigation;
+                  return ListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                    leading: const Icon(Icons.alt_route),
+                    title: Text('Навигация (такт ${m + 1})'),
+                    trailing: DropdownButton<NavigationMark?>(
+                      value: cur,
+                      items: [
+                        for (final entry in _navLabels.entries)
+                          DropdownMenuItem<NavigationMark?>(
+                              value: entry.key, child: Text(entry.value)),
+                      ],
+                      onChanged: (v) {
+                        _setNavigation(v);
                         setSheet(() {});
                       },
                     ),
