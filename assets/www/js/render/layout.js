@@ -1,9 +1,10 @@
 // [ScoreFlow engine] Layout primitives — вынесено из index.html без изменений
 // логики. Общие строительные блоки VexFlow, на которых строятся ОБА пайплайна:
 // экранный рендер (render.js) и постраничная печать (index.html / print-слой).
-// Функции чистые: VexFlow (VF) передаётся параметром, модуль ничего не
-// импортирует. Поэтому print-слой не зависит от экранного рендера — общие
-// примитивы живут здесь, а не в render.js.
+// Функции чистые: VexFlow (VF) передаётся параметром; из зависимостей — только
+// pure-domain (articulationGlyph — проекция артикуляции в глиф, единое место).
+// Поэтому print-слой не зависит от экранного рендера — общие примитивы здесь.
+import { articulationGlyph } from '../domain/articulations.js';
 
 const REST_KEY = { treble: 'b/4', bass: 'd/3', percussion: 'b/4' };
 
@@ -59,6 +60,27 @@ export function buildVoice(VF, notes, clef, beats, beatValue, cursorIdx, measure
             // точку); тиковую длительность задаёт опция dots выше.
             for (let d = 0; d < dots; d++) {
                 VF.Dot.buildAndAttach([sn], { all: true });
+            }
+            // Артикуляции ноты (staccato/accent/…): глиф VexFlow из domain
+            // (единое место), размещаем на стороне ГОЛОВКИ — напротив штиля
+            // (штиль вверх -> под нотой, штиль вниз -> над нотой), как в
+            // MuseScore/Dorico. Несколько артикуляций складываются VexFlow в
+            // столбик (ModifierContext), без наложений. Общий код экрана и PDF.
+            if (!isRest && n.art && n.art.length &&
+                VF.Articulation && VF.Modifier) {
+                const dir = sn.getStemDirection ? sn.getStemDirection() : 1;
+                const pos = dir === 1
+                    ? VF.Modifier.Position.BELOW
+                    : VF.Modifier.Position.ABOVE;
+                for (let a = 0; a < n.art.length; a++) {
+                    const code = articulationGlyph(n.art[a]);
+                    if (!code) continue;
+                    try {
+                        const art = new VF.Articulation(code);
+                        if (art.setPosition) art.setPosition(pos);
+                        sn.addModifier(art, 0);
+                    } catch (e) { /* пропуск неизвестного глифа */ }
+                }
             }
             if (i === cursorIdx) {
                 sn.setStyle({ fillStyle: '#2196F3', strokeStyle: '#2196F3' });
