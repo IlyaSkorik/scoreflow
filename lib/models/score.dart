@@ -264,6 +264,79 @@ enum RepeatMark {
       };
 }
 
+/// Вольта (первая/вторая концовка) — FIRST-CLASS нотационный объект-ДИАПАЗОН,
+/// как в MuseScore/Dorico/Finale. НЕ свойство рендера: вольта привязана к
+/// ПЕРВОМУ такту концовки и переживает reflow позиционно (по номеру такта),
+/// точно как [RepeatMark]/[BarlineType]/[Measure.keySignature]. Тесно
+/// интегрирована с [RepeatMark]: playback-компилятор на нужном проходе повтора
+/// проигрывает ту концовку, чей [numbers] содержит номер прохода (движок
+/// domain/voltas + domain/repeats.expandMeasureOrder — ЕДИНСТВЕННОЕ место
+/// разворота порядка). Scheduler о вольтах не знает.
+///
+/// Модель диапазонная и расширяется БЕЗ редизайна: [numbers] — список номеров
+/// концовки ([1], [2] и, в будущем, [3], [4], [1,3] …), [span] — сколько тактов
+/// покрывает скобка (>=1 — многотактовые концовки). Хранится под
+/// зарезервированным ключом `_volta` (как `_repeat`/`_bar`): старые файлы без
+/// него грузятся, с голосами он не путается (имена голосов без `_`).
+class Volta {
+  final List<int> numbers;
+  final int span;
+
+  Volta({required this.numbers, this.span = 1});
+
+  /// Первая концовка (номер 1, один такт) — типовой пресет редактора.
+  factory Volta.ending(int number, {int span = 1}) =>
+      Volta(numbers: [number], span: span < 1 ? 1 : span);
+
+  /// Текстовая метка скобки: "1.", "2.", "1, 3." … Зеркало движкового
+  /// domain/voltas.voltaLabel — движок и модель рисуют одинаковый текст.
+  String get label => '${(numbers.isEmpty ? const [1] : numbers).join(', ')}.';
+
+  Volta copy() => Volta(numbers: List<int>.of(numbers), span: span);
+
+  /// Persistence-JSON: список номеров под `n`; span пишется только если > 1
+  /// (лаконичный JSON — большинство концовок однотактовые).
+  Map<String, dynamic> toJson() => {
+        'n': numbers,
+        if (span != 1) 'span': span,
+      };
+
+  /// Render-проекция для движка (domain/voltas читает `n` и `span`). span
+  /// пишем всегда — движку удобнее не додумывать дефолт.
+  Map<String, dynamic> toRenderJson() => {'n': numbers, 'span': span};
+
+  factory Volta.fromJson(Map<String, dynamic> j) {
+    final raw = j['n'] ?? j['numbers'];
+    final nums = <int>[];
+    if (raw is List) {
+      for (final e in raw) {
+        final v = (e is num) ? e.toInt() : int.tryParse('$e');
+        if (v != null && v > 0 && !nums.contains(v)) nums.add(v);
+      }
+    }
+    nums.sort();
+    final s = j['span'] as int? ?? 1;
+    return Volta(numbers: nums.isEmpty ? [1] : nums, span: s < 1 ? 1 : s);
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is Volta &&
+      other.span == span &&
+      other.numbers.length == numbers.length &&
+      _sameNumbers(other.numbers);
+
+  bool _sameNumbers(List<int> o) {
+    for (var i = 0; i < numbers.length; i++) {
+      if (numbers[i] != o[i]) return false;
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode => Object.hash(span, Object.hashAll(numbers));
+}
+
 /// Знак альтерации головки ноты. ОТДЕЛЬНАЯ модель (не bool) — как в MuseScore/
 /// Dorico/Finale. Архитектура расширяема до микротонов/четвертьтонов простым
 /// добавлением значений: каждое значение само знает свой сдвиг в полутонах и
@@ -618,18 +691,26 @@ class Measure {
   /// repeat barline, но playback compiler читает именно `_repeat`.
   RepeatMark? repeat;
 
+  /// Вольта (концовка), НАЧИНАющаяся с этого такта, или null — такт не начинает
+  /// концовку. Диапазонный объект (см. [Volta]): покрывает [Volta.span] тактов.
+  /// Хранится отдельно от `_bar`/`_repeat`, потому что это спан над станом, а не
+  /// граница. Позиционный якорь по номеру такта (переживает reflow).
+  Volta? volta;
+
   static const String _dynKey = '_dyn';
   static const String _keyKey = '_key';
   static const String _tsKey = '_ts';
   static const String _barKey = '_bar';
   static const String _repeatKey = '_repeat';
+  static const String _voltaKey = '_volta';
 
   Measure(this.voices,
       {Map<String, List<Dynamic>>? dynamics,
       this.keySignature,
       this.timeSignature,
       this.barline,
-      this.repeat})
+      this.repeat,
+      this.volta})
       : dynamics = dynamics ?? {};
 
   factory Measure.empty(InstrumentType instrument) => Measure({
@@ -658,6 +739,7 @@ class Measure {
             : TimeSignature(timeSignature!.beats, timeSignature!.beatValue),
         barline: barline,
         repeat: repeat,
+        volta: volta?.copy(),
       );
 
   /// JSON оттенков по голосам (только непустые списки) — общий для persistence
@@ -679,6 +761,7 @@ class Measure {
     if (timeSignature != null) j[_tsKey] = timeSignature!.vex;
     if (barline != null && !barline!.isDefault) j[_barKey] = barline!.id;
     if (repeat != null) j[_repeatKey] = repeat!.id;
+    if (volta != null) j[_voltaKey] = volta!.toJson();
     return j;
   }
 
@@ -699,6 +782,7 @@ class Measure {
     if (timeSignature != null) j[_tsKey] = timeSignature!.vex;
     if (barline != null && !barline!.isDefault) j[_barKey] = barline!.id;
     if (repeat != null) j[_repeatKey] = repeat!.id;
+    if (volta != null) j[_voltaKey] = volta!.toRenderJson();
     return j;
   }
 
@@ -709,6 +793,7 @@ class Measure {
     TimeSignature? timeSignature;
     BarlineType? barline;
     RepeatMark? repeat;
+    Volta? volta;
     for (final entry in j.entries) {
       if (entry.key == _dynKey) {
         final m = entry.value as Map<String, dynamic>;
@@ -737,6 +822,11 @@ class Measure {
         repeat = RepeatMark.fromId(entry.value as String?);
         continue;
       }
+      if (entry.key == _voltaKey) {
+        final v = entry.value;
+        volta = v == null ? null : Volta.fromJson(v as Map<String, dynamic>);
+        continue;
+      }
       voices[entry.key] = (entry.value as List)
           .map((e) => MusicNote.fromJson(e as Map<String, dynamic>))
           .toList();
@@ -746,7 +836,8 @@ class Measure {
         keySignature: keySignature,
         timeSignature: timeSignature,
         barline: barline,
-        repeat: repeat);
+        repeat: repeat,
+        volta: volta);
   }
 }
 
