@@ -17,30 +17,10 @@ const List<String> _keySignatures = [
   'C', 'G', 'D', 'A', 'E', 'B', 'F#', 'F', 'Bb', 'Eb', 'Ab', 'Db'
 ];
 
-/// Служебное значение пикера тональности «Без смены» (убрать смену в такте).
-/// Не пересекается с именами тональностей VexFlow.
-const String _kInheritKey = '__inherit__';
-
 /// Размеры такта (пресеты) для пикера в листе «Ещё».
 const List<String> _timeSignatures = [
   '2/4', '3/4', '4/4', '5/4', '6/8', '7/8', '9/8', '12/8', '2/2', '3/8', '5/8'
 ];
-
-/// Служебное значение пикера размера «Без смены» (убрать смену в такте).
-const String _kInheritTime = '__inherit_ts__';
-
-/// Служебное значение пикера размера: ТЕКУЩИЙ нестандартный размер, показанный
-/// как выбранный пункт («7/16 (своё)»). Отдельно от [_kPickTime], иначе пункт
-/// «своё» и пункт «Другой…» делили бы одно value и DropdownButton бросал бы
-/// assert (в списке допустим ровно один пункт с value == текущему).
-const String _kCustomTime = '__custom_ts__';
-
-/// Служебное значение пункта «Другой…» (действие «ввести произвольный n/d»).
-const String _kPickTime = '__pick_ts__';
-
-/// Служебное значение пикера темпа «Другое…» (ввод произвольного BPM). Отрицат.
-/// sentinel — не пересекается с реальными bpm (20..400).
-const int _kCustomTempo = -1;
 
 /// Подписи типов тактовой черты для пикера в листе «Ещё». Порядок = порядок
 /// показа (обычная -> двойная/финальная -> штриховая/пунктирная -> засечка/
@@ -1332,331 +1312,237 @@ class _EditorScreenState extends State<EditorScreen> {
     await showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
-      // Контента много (темп+слайдер, sustain, тональность, размер, действия) —
-      // на фортепиано он не влезает в дефолтные 9/16 экрана. Снимаем потолок
-      // высоты и делаем содержимое прокручиваемым, чтобы не переполняло низ.
+      // Контента много (структура такта + воспроизведение + действия) — снимаем
+      // потолок высоты и делаем содержимое прокручиваемым.
       isScrollControlled: true,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheet) => SafeArea(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
-                  child:
-                      Text('Ещё', style: Theme.of(ctx).textTheme.titleMedium),
+        builder: (ctx, setSheet) {
+          final m = _cursor.measure;
+          final atStart = m == 0;
+
+          // Единый визуальный чип-выбор (M3 ChoiceChip): один тап вместо
+          // «открыть список -> прочитать -> выбрать». Активный вариант залит.
+          Widget chip(String label, bool selected, VoidCallback onTap) =>
+              ChoiceChip(
+                label: Text(label),
+                selected: selected,
+                visualDensity: VisualDensity.compact,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                onSelected: (_) => onTap(),
+              );
+
+          // Группа: заголовок + перенос-строка чипов.
+          Widget group(String title, List<Widget> chips) => Padding(
+                padding: const EdgeInsets.fromLTRB(8, 10, 8, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: Theme.of(ctx).textTheme.labelLarge?.copyWith(
+                            color:
+                                Theme.of(ctx).colorScheme.onSurfaceVariant)),
+                    const SizedBox(height: 6),
+                    Wrap(spacing: 6, runSpacing: 4, children: chips),
+                  ],
                 ),
-                ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                  leading: const Icon(Icons.speed),
-                  title: const Text('Начальный темп'),
-                  subtitle: const Text('Темп в начале пьесы; смены — инструментом «Темп»'),
-                  trailing: Text('${score.tempo} BPM',
-                      style: const TextStyle(fontWeight: FontWeight.bold)),
-                ),
-                Slider(
-                  value: score.tempo.toDouble().clamp(40, 240),
-                  min: 40,
-                  max: 240,
-                  divisions: 200,
-                  label: '${score.tempo} BPM',
-                  onChanged: (v) {
-                    _setTempo(v.round());
-                    setSheet(() {});
-                  },
-                ),
-                if (isPiano)
-                  SwitchListTile(
+              );
+
+          // --- действующие значения по такту под курсором ---
+          final effKey = score.effectiveKeySignatureAt(m);
+          final ownKey =
+              atStart ? score.keySignature : score.measures[m].keySignature;
+          final effTs = score.effectiveTimeSignatureAt(m).vex;
+          final ownTs = atStart
+              ? score.timeSignature.vex
+              : score.measures[m].timeSignature?.vex;
+          final isCustomTs = ownTs != null && !_timeSignatures.contains(ownTs);
+          final curBar = score.effectiveBarlineAt(m);
+          final curRepeat = score.measures[m].repeat;
+          final vn = score.measures[m].volta?.numbers.first;
+          final curVolta = (vn == 1 || vn == 2) ? vn : null;
+          final curNav = score.measures[m].navigation;
+          final curTempo = _cursorTempo?.bpm;
+          const tempoPresets = [40, 60, 80, 100, 120, 140, 160];
+          final isCustomTempo =
+              curTempo != null && !tempoPresets.contains(curTempo);
+
+          return SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(8, 0, 8, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
+                    child: Text('Такт ${m + 1}',
+                        style: Theme.of(ctx).textTheme.titleMedium),
+                  ),
+
+                  // Тональность (фортепиано): такт 1 — начальная, дальше — смена
+                  // по месту. «Без смены» доступно только не в первом такте.
+                  if (isPiano)
+                    group(
+                        atStart
+                            ? 'Тональность'
+                            : 'Тональность · действует $effKey',
+                        [
+                          if (!atStart)
+                            chip('Без смены', ownKey == null, () {
+                              _setMeasureKey(null);
+                              setSheet(() {});
+                            }),
+                          for (final k in _keySignatures)
+                            chip(k, atStart ? effKey == k : ownKey == k, () {
+                              _setMeasureKey(k);
+                              setSheet(() {});
+                            }),
+                        ]),
+
+                  // Размер: пресеты + «Другой…» (или текущий нестандартный).
+                  group(atStart ? 'Размер' : 'Размер · действует $effTs', [
+                    if (!atStart)
+                      chip('Без смены', ownTs == null, () {
+                        _setMeasureTimeSignature(null);
+                        setSheet(() {});
+                      }),
+                    for (final t in _timeSignatures)
+                      chip(t, ownTs == t, () {
+                        _setMeasureTimeSignature(t);
+                        setSheet(() {});
+                      }),
+                    chip(isCustomTs ? ownTs : 'Другой…', isCustomTs, () async {
+                      final custom = await _pickCustomTimeSignature(
+                          score.effectiveTimeSignatureAt(m));
+                      if (custom != null) _setMeasureTimeSignature(custom);
+                      setSheet(() {});
+                    }),
+                  ]),
+
+                  // Тактовая черта (правая граница такта).
+                  group('Тактовая черта', [
+                    for (final t in BarlineType.values)
+                      chip(_barlineLabels[t]!, curBar == t, () {
+                        _setMeasureBarline(t);
+                        setSheet(() {});
+                      }),
+                  ]),
+
+                  // Повтор (реприза) на границе такта.
+                  group('Повтор', [
+                    for (final entry in _repeatLabels.entries)
+                      chip(entry.value, curRepeat == entry.key, () {
+                        _setMeasureRepeat(entry.key);
+                        setSheet(() {});
+                      }),
+                  ]),
+
+                  // Вольта (1-я/2-я концовка), начинается с этого такта.
+                  group('Вольта', [
+                    for (final entry in _voltaLabels.entries)
+                      chip(entry.value, curVolta == entry.key, () {
+                        _setMeasureVolta(entry.key);
+                        setSheet(() {});
+                      }),
+                  ]),
+
+                  // Навигация (Segno/Coda/D.C./D.S./Fine/To Coda …).
+                  group('Навигация', [
+                    for (final entry in _navLabels.entries)
+                      chip(entry.value, curNav == entry.key, () {
+                        _setNavigation(entry.key);
+                        setSheet(() {});
+                      }),
+                  ]),
+
+                  // Смена темпа (♩=) на позиции курсора. «Нет» — только не в
+                  // начале (начальный темп снять нельзя, он живёт в слайдере).
+                  group('Темп ♩=', [
+                    if (!atStart)
+                      chip('Нет', curTempo == null, () {
+                        _setTempoMark(null);
+                        setSheet(() {});
+                      }),
+                    for (final p in tempoPresets)
+                      chip('$p', curTempo == p, () {
+                        _setTempoMark(p);
+                        setSheet(() {});
+                      }),
+                    chip(isCustomTempo ? '$curTempo' : 'Другое…', isCustomTempo,
+                        () async {
+                      final custom = await _pickCustomBpm(curTempo ?? 120);
+                      if (custom != null) _setTempoMark(custom);
+                      setSheet(() {});
+                    }),
+                  ]),
+
+                  const Divider(height: 20),
+
+                  // Воспроизведение: начальный темп всей пьесы (слайдер точнее
+                  // чипов) и sustain (фортепиано).
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
+                    child: Text('Воспроизведение',
+                        style: Theme.of(ctx).textTheme.titleSmall),
+                  ),
+                  ListTile(
                     contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                    secondary: const Icon(Icons.piano),
-                    title: const Text('Демпфер-педаль (sustain)'),
-                    value: _sustain,
-                    onChanged: (_) {
-                      _toggleSustain();
+                    leading: const Icon(Icons.speed),
+                    title: const Text('Начальный темп'),
+                    trailing: Text('${score.tempo} BPM',
+                        style: const TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                  Slider(
+                    value: score.tempo.toDouble().clamp(40, 240),
+                    min: 40,
+                    max: 240,
+                    divisions: 200,
+                    label: '${score.tempo} BPM',
+                    onChanged: (v) {
+                      _setTempo(v.round());
                       setSheet(() {});
                     },
                   ),
-                // Тональность — контекстно к ТАКТУ под курсором: такт 1 задаёт
-                // начальную тональность партитуры, такты >1 — смену по месту
-                // (вставка/смена/удаление). Действующая тональность показана в
-                // подзаголовке. Смена немедленно перерендерит экран/PDF и
-                // playback, попадёт в Undo/Redo и автосейв.
-                if (isPiano)
-                  Builder(builder: (ctx) {
-                    final m = _cursor.measure;
-                    final atStart = m == 0;
-                    final eff = score.effectiveKeySignatureAt(m);
-                    final own = atStart
-                        ? score.keySignature
-                        : score.measures[m].keySignature;
-                    final String? ddValue = atStart
-                        ? (_keySignatures.contains(own) ? own : null)
-                        : (own == null
-                            ? _kInheritKey
-                            : (_keySignatures.contains(own) ? own : null));
-                    return ListTile(
+                  if (isPiano)
+                    SwitchListTile(
                       contentPadding:
                           const EdgeInsets.symmetric(horizontal: 8),
-                      leading: const Icon(Icons.music_note),
-                      title: Text(atStart
-                          ? 'Тональность'
-                          : 'Тональность (такт ${m + 1})'),
-                      subtitle:
-                          atStart ? null : Text('Действует: $eff'),
-                      trailing: DropdownButton<String>(
-                        value: ddValue,
-                        hint: Text(atStart ? eff : 'Без смены'),
-                        items: [
-                          if (!atStart)
-                            const DropdownMenuItem(
-                                value: _kInheritKey, child: Text('Без смены')),
-                          for (final k in _keySignatures)
-                            DropdownMenuItem(value: k, child: Text(k)),
-                        ],
-                        onChanged: (v) {
-                          if (v == null) return;
-                          _setMeasureKey(v == _kInheritKey ? null : v);
-                          setSheet(() {});
-                        },
-                      ),
-                    );
-                  }),
-                // Размер — контекстно к ТАКТУ под курсором: такт 1 задаёт
-                // начальный размер партитуры, такты >1 — смену по месту
-                // (вставка/смена/удаление). Действующий размер показан в
-                // подзаголовке. Смена немедленно перепакует ноты под новую
-                // ёмкость, перерендерит экран/PDF/playback, попадёт в Undo/Redo
-                // и автосейв. Доступно обоим инструментам (метр есть и у ударных).
-                Builder(builder: (ctx) {
-                  final m = _cursor.measure;
-                  final atStart = m == 0;
-                  final eff = score.effectiveTimeSignatureAt(m).vex;
-                  final own = atStart
-                      ? score.timeSignature.vex
-                      : score.measures[m].timeSignature?.vex;
-                  final String? ddValue = atStart
-                      ? (_timeSignatures.contains(own) ? own : _kCustomTime)
-                      : (own == null
-                          ? _kInheritTime
-                          : (_timeSignatures.contains(own)
-                              ? own
-                              : _kCustomTime));
-                  return ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                    leading: const Icon(Icons.straighten),
-                    title: Text(
-                        atStart ? 'Размер' : 'Размер (такт ${m + 1})'),
-                    subtitle: atStart ? null : Text('Действует: $eff'),
-                    trailing: DropdownButton<String>(
-                      value: ddValue,
-                      hint: Text(atStart ? eff : 'Без смены'),
-                      items: [
-                        if (!atStart)
-                          const DropdownMenuItem(
-                              value: _kInheritTime, child: Text('Без смены')),
-                        for (final t in _timeSignatures)
-                          DropdownMenuItem(value: t, child: Text(t)),
-                        // Текущий нестандартный размер виден как выбранный пункт.
-                        if (own != null && !_timeSignatures.contains(own))
-                          DropdownMenuItem(
-                              value: _kCustomTime, child: Text('$own (своё)')),
-                        const DropdownMenuItem(
-                            value: _kPickTime, child: Text('Другой…')),
-                      ],
-                      onChanged: (v) async {
-                        if (v == null || v == _kCustomTime) return;
-                        if (v == _kInheritTime) {
-                          _setMeasureTimeSignature(null);
-                        } else if (v == _kPickTime) {
-                          final custom = await _pickCustomTimeSignature(
-                              score.effectiveTimeSignatureAt(m));
-                          if (custom != null) {
-                            _setMeasureTimeSignature(custom);
-                          }
-                        } else {
-                          _setMeasureTimeSignature(v);
-                        }
+                      secondary: const Icon(Icons.piano),
+                      title: const Text('Демпфер-педаль (sustain)'),
+                      value: _sustain,
+                      onChanged: (_) {
+                        _toggleSustain();
                         setSheet(() {});
                       },
                     ),
-                  );
-                }),
-                // Тактовая черта — контекстно к ТАКТУ под курсором: тип ПРАВОЙ
-                // границы (обычная/двойная/финальная/штриховая/пунктирная/
-                // засечка/короткая/невидимая). Нотационный объект на границе
-                // такта; смена немедленно перерендерит экран/PDF, попадёт в
-                // Undo/Redo и автосейв. Доступно обоим инструментам.
-                Builder(builder: (ctx) {
-                  final m = _cursor.measure;
-                  // Показываем ДЕЙСТВУЮЩУЮ черту: на последнем такте без override
-                  // это финальная (позиционный дефолт), а не «обычная».
-                  final cur = score.effectiveBarlineAt(m);
-                  return ListTile(
+
+                  const Divider(height: 20),
+
+                  // Действия партитуры. «Переименовать» убрано — тап по заголовку
+                  // в AppBar делает то же (без дубля).
+                  ListTile(
                     contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                    leading: const Icon(Icons.view_week_outlined),
-                    title: Text('Тактовая черта (такт ${m + 1})'),
-                    trailing: DropdownButton<BarlineType>(
-                      value: cur,
-                      items: [
-                        for (final t in BarlineType.values)
-                          DropdownMenuItem(
-                              value: t, child: Text(_barlineLabels[t]!)),
-                      ],
-                      onChanged: (v) {
-                        if (v == null) return;
-                        _setMeasureBarline(v);
-                        setSheet(() {});
-                      },
-                    ),
-                  );
-                }),
-                Builder(builder: (ctx) {
-                  final m = _cursor.measure;
-                  final cur = score.measures[m].repeat;
-                  return ListTile(
+                    leading: const Icon(Icons.playlist_add),
+                    title: const Text('Добавить такт'),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _addMeasure();
+                    },
+                  ),
+                  ListTile(
                     contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                    leading: const Icon(Icons.repeat),
-                    title: Text('Повтор (такт ${m + 1})'),
-                    trailing: DropdownButton<RepeatMark?>(
-                      value: cur,
-                      items: [
-                        for (final entry in _repeatLabels.entries)
-                          DropdownMenuItem<RepeatMark?>(
-                              value: entry.key, child: Text(entry.value)),
-                      ],
-                      onChanged: (v) {
-                        _setMeasureRepeat(v);
-                        setSheet(() {});
-                      },
-                    ),
-                  );
-                }),
-                // Вольта (концовка) — контекстно к ТАКТУ под курсором: 1-я/2-я
-                // концовка НАЧИНАется с этого такта. Нотационный объект-спан над
-                // станом; интегрирован с повтором (playback выбирает концовку по
-                // проходу). Смена немедленно перерендерит экран/PDF, попадёт в
-                // Undo/Redo и автосейв. Доступно обоим инструментам.
-                Builder(builder: (ctx) {
-                  final m = _cursor.measure;
-                  final n = score.measures[m].volta?.numbers.first;
-                  final cur = (n == 1 || n == 2) ? n : null;
-                  return ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                    leading: const Icon(Icons.repeat_one),
-                    title: Text('Вольта (такт ${m + 1})'),
-                    trailing: DropdownButton<int?>(
-                      value: cur,
-                      items: [
-                        for (final entry in _voltaLabels.entries)
-                          DropdownMenuItem<int?>(
-                              value: entry.key, child: Text(entry.value)),
-                      ],
-                      onChanged: (v) {
-                        _setMeasureVolta(v);
-                        setSheet(() {});
-                      },
-                    ),
-                  );
-                }),
-                // Навигация — контекстно к ТАКТУ под курсором: Segno/Coda/D.C./
-                // D.S./Fine/To Coda. Определяет порядок воспроизведения (движок),
-                // символ рисуется над станом. Undo/Redo и автосейв — как всё.
-                Builder(builder: (ctx) {
-                  final m = _cursor.measure;
-                  final cur = score.measures[m].navigation;
-                  return ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                    leading: const Icon(Icons.alt_route),
-                    title: Text('Навигация (такт ${m + 1})'),
-                    trailing: DropdownButton<NavigationMark?>(
-                      value: cur,
-                      items: [
-                        for (final entry in _navLabels.entries)
-                          DropdownMenuItem<NavigationMark?>(
-                              value: entry.key, child: Text(entry.value)),
-                      ],
-                      onChanged: (v) {
-                        _setNavigation(v);
-                        setSheet(() {});
-                      },
-                    ),
-                  );
-                }),
-                // Смена темпа (♩ = N) на позиции курсора (такт + доля ноты).
-                // Пресеты + произвольный BPM; playback-время строит движок.
-                Builder(builder: (ctx) {
-                  final m = _cursor.measure;
-                  final cur = _cursorTempo?.bpm;
-                  const presets = [40, 60, 80, 100, 120, 140, 160];
-                  final inPreset = cur != null && presets.contains(cur);
-                  return ListTile(
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                    leading: const Icon(Icons.speed),
-                    title: Text('Темп ♩= (такт ${m + 1})'),
-                    subtitle: cur != null && !inPreset ? Text('$cur BPM') : null,
-                    trailing: DropdownButton<int?>(
-                      // value = null / пресет / произвольный bpm — совпадает
-                      // РОВНО с одним пунктом; «Другое…» (_kCustomTempo) с value
-                      // не совпадает (bpm положителен), поэтому дубля значения нет.
-                      value: cur,
-                      hint: const Text('Нет'),
-                      items: [
-                        const DropdownMenuItem<int?>(value: null, child: Text('Нет')),
-                        for (final p in presets)
-                          DropdownMenuItem<int?>(value: p, child: Text('$p')),
-                        if (cur != null && !inPreset)
-                          DropdownMenuItem<int?>(
-                              value: cur, child: Text('$cur (своё)')),
-                        const DropdownMenuItem<int?>(
-                            value: _kCustomTempo, child: Text('Другое…')),
-                      ],
-                      onChanged: (v) async {
-                        if (v == _kCustomTempo) {
-                          final custom = await _pickCustomBpm(cur ?? 120);
-                          if (custom != null) _setTempoMark(custom);
-                        } else {
-                          _setTempoMark(v);
-                        }
-                        setSheet(() {});
-                      },
-                    ),
-                  );
-                }),
-                const Divider(height: 8),
-                ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                  leading: const Icon(Icons.playlist_add),
-                  title: const Text('Добавить такт'),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _addMeasure();
-                  },
-                ),
-                ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                  leading: const Icon(Icons.drive_file_rename_outline),
-                  title: const Text('Переименовать'),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _rename();
-                  },
-                ),
-                ListTile(
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                  leading: const Icon(Icons.picture_as_pdf_outlined),
-                  title: const Text('Экспорт в PDF'),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    _exportPdf();
-                  },
-                ),
-              ],
+                    leading: const Icon(Icons.picture_as_pdf_outlined),
+                    title: const Text('Экспорт в PDF'),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _exportPdf();
+                    },
+                  ),
+                ],
+              ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
