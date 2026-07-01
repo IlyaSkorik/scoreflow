@@ -15,10 +15,15 @@ import { expandPlaybackOrder } from '../domain/navigation.js';
 import { buildTempoMap, tempoSpq } from '../domain/tempo.js';
 
 // Tie-merge для playback: внутри каждого голоса (события уже в порядке
-// времени) поглощаем цепочку лиг длительности в одно событие — один
-// attack, суммарная длительность. Поглощённые ноты переходят в
-// coveredNoteIds головного события (для подсветки всей цепочки).
-// Лига валидна лишь между нотами одной высоты, не паузами.
+// ВОСПРОИЗВЕДЕНИЯ по доле) поглощаем цепочку лиг длительности в одно событие —
+// один attack, суммарная длительность. Поглощённые ноты переходят в
+// coveredNoteIds головного события (для подсветки всей цепочки). Лига валидна
+// лишь между нотами одной высоты, идущими ПОДРЯД, и не паузами.
+//
+// Работает на РАЗВЁРНУТЫХ событиях (после repeat/volta/навигации): «следующая»
+// нота лиги — понятие порядка воспроизведения, поэтому на повторном проходе или
+// в пропускаемой вольте лига сливается ровно с той нотой, что реально звучит
+// следующей (или ни с чем — тогда голова сохраняет свою длительность).
 function mergeTies(events) {
     const byVoice = {};
     for (let i = 0; i < events.length; i++) {
@@ -69,6 +74,10 @@ function expandEvents(linearEvents, order, originalStarts, originalCapsQ, effTs)
                 startBeat: dstBase + (e.startBeat - srcBase),
                 playbackMeasure: oi,
                 sourceMeasure: mi,
+                // Своя копия списка поглощённых лиг: shallow-copy разделил бы
+                // один массив между всеми проходами, и tie-merge (ниже по
+                // пайплайну) писал бы подсветку одного прохода во все.
+                coveredNoteIds: (e.coveredNoteIds || []).slice(),
             }));
         }
     }
@@ -181,21 +190,11 @@ export function compilePlayback(payload, baseTempoOverride) {
             }
         }
     }
-    // Tie-merge: цепочка нот одной высоты -> одно событие (один attack,
-    // суммарная длительность). Работает через границы тактов (события
-    // уже на общей beat-сетке). Slur на playback НЕ влияет.
-    events = mergeTies(events);
+    // Линейные события (до разворота) держим в стабильном порядке по доле —
+    // для диагностики (linearEvents) и построения сетки. Лиги здесь НЕ сливаем:
+    // «следующая» нота лиги определяется порядком ВОСПРОИЗВЕДЕНИЯ, а он ещё не
+    // развёрнут (см. mergeTies после expandEvents ниже). Slur на playback не влияет.
     events.sort(function (a, b) { return a.startBeat - b.startBeat; });
-
-    // Артикуляции — ПОСЛЕДНИЙ выразительный слой ПОСЛЕ динамики/вилок и tie-merge:
-    // домножают длительность/громкость/атаку уже разрешённого события. Правила и
-    // константы — в domain/articulations (единое место). Scheduler читает те же
-    // durationBeats/velocity — планировщик НЕ меняется. Считаем на ЛИНЕЙНЫХ
-    // событиях (до repeat/volta-разворота); развёрнутые копии наследуют поля.
-    for (let i = 0; i < events.length; i++) {
-        const e = events[i];
-        if (e.articulations && e.articulations.length) applyArticulations(e, e.articulations);
-    }
 
     // Разворот порядка — единственное место, где playback узнаёт о репризах,
     // вольтах И навигации. domain/navigation оборачивает repeat/volta-разворот
@@ -203,6 +202,24 @@ export function compilePlayback(payload, baseTempoOverride) {
     // получает уже развёрнутые events/starts/clicks и не содержит навигации.
     const measureOrder = expandPlaybackOrder(measures);
     const expanded = expandEvents(events, measureOrder, starts, capsQ, effTs);
+
+    // Tie-merge на РАЗВЁРНУТЫХ событиях: цепочка нот одной высоты, идущих ПОДРЯД
+    // в порядке воспроизведения, -> одно звучащее событие (один attack, суммарная
+    // длительность). Слияние ПОСЛЕ разворота обязательно: на повторном проходе или
+    // в пропускаемой вольте «следующая» нота может быть другой (или отсутствовать),
+    // поэтому лига через границу такта не роняет ноту (лига в начало повторяемой
+    // секции) и не затягивает её на пропущенный такт (лига в первую вольту).
+    expanded.events = mergeTies(expanded.events);
+    expanded.events.sort(function (a, b) { return a.startBeat - b.startBeat; });
+
+    // Артикуляции — ПОСЛЕДНИЙ выразительный слой ПОСЛЕ динамики/вилок и tie-merge:
+    // домножают длительность/громкость/атаку уже разрешённого (и слитого лигой)
+    // события. Правила и константы — в domain/articulations (единое место).
+    // Scheduler читает те же durationBeats/velocity — планировщик НЕ меняется.
+    for (let i = 0; i < expanded.events.length; i++) {
+        const e = expanded.events[i];
+        if (e.articulations && e.articulations.length) applyArticulations(e, e.articulations);
+    }
 
     // Tempo mapping — ЕДИНСТВЕННОЕ место превращения долей в АБСОЛЮТНОЕ время.
     // Строим на РАЗВЁРНУТОЙ таймлайн-сетке (repeat/volta уже развёрнуты): базовый
