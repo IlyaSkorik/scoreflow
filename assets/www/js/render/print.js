@@ -18,7 +18,9 @@ import { effectiveKeys, cancelKeyFor } from '../domain/keysig.js';
 import { effectiveTimeSignatures } from '../domain/timesig.js';
 import { effectiveBarlines } from '../domain/barlines.js';
 import { effectiveRepeatBarlines } from '../domain/repeats.js';
+import { effectiveVoltas } from '../domain/voltas.js';
 import { setupBarline, drawCustomBarline, drawGrandBarline } from './barlines.js';
+import { drawVoltasInBand, voltaHeadroom } from './voltas.js';
 import { drawDynamic } from './dynamics.js';
 import { dynamicsBaseline } from './dynamics_layout.js';
 import { noteOnsets, indexAtBeat } from '../domain/dynamics.js';
@@ -122,8 +124,13 @@ function drawTitle(ctx, title, composer) {
 // номер системы, [registry] — реестр noteId -> {sn, ctx, sys} для
 // последующего прохода лиг (Tie/Slur), общий на всю печать.
 function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
-                    effKeys, bars, sysIndex, registry, staveReg) {
+                    effKeys, bars, sysIndex, registry, staveReg, voltas, vpad) {
     let x = PAGE.mx;
+    // Станы опускаем на vpad — над ними резервируется место под скобки вольт.
+    const staveY = yTop + (vpad || 0);
+    // Боксы тактов {x,w} и Y верхней линейки — для прохода вольт этой системы.
+    const voltaBoxes = {};
+    let bandTopY = null;
     // Тональность головы системы (+ бекары-отмена, если система начинается со
     // смены) — действующая тональность первого такта системы.
     const f = sys.firstMeasure;
@@ -154,7 +161,7 @@ function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
 
         // Станы такта.
         const staves = cfg.staves.map(function (st) {
-            const stave = new VF.Stave(x, yTop + st.dy, staveW);
+            const stave = new VF.Stave(x, staveY + st.dy, staveW);
             if (isFirst) {
                 stave.addClef(st.clef);
                 if (cfg.keySig && sysKey) stave.addKeySignature(sysKey, sysCancel || undefined);
@@ -257,8 +264,20 @@ function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
             ctx.restore();
         }
 
+        // Бокс такта и Y верхней линейки — для скобок вольт этой системы.
+        voltaBoxes[idx] = { x: x, w: staveW };
+        if (bandTopY == null) bandTopY = staves[0].getYForLine(0);
+
         x += staveW;
     });
+
+    // Вольты этой системы — общим со экраном кодом (render/voltas). Сегмент
+    // рисуется только для вольт, пересекающих такты системы; растянутая через
+    // перенос вольта ложится сегментом на каждую систему.
+    if (voltas && voltas.length) {
+        drawVoltasInBand(ctx, voltas,
+            function (mi) { return voltaBoxes[mi] || null; }, bandTopY);
+    }
 }
 
 // Главный вход постраничной вёрстки: строит страницы A4 в #print-root,
@@ -282,6 +301,11 @@ export function renderPrintPages(score) {
     // Тип тактовой черты (правой границы) КАЖДОГО такта — единое разрешение из
     // domain/barlines (та же логика, что на экране).
     const bars = effectiveRepeatBarlines(measures, effectiveBarlines(measures));
+    // Вольты — единое разрешение из domain/voltas; отрисовка общим со экраном
+    // кодом (render/voltas). Когда вольты есть, каждая система получает headroom
+    // (vpad) сверху под скобки.
+    const voltas = effectiveVoltas(measures);
+    const vpad = voltaHeadroom(voltas);
     if (measures.length === 0) return 0;
     // Смена тональности / размера на такте i>0 (для ширины и отрисовки в
     // середине системы). Размер на такте 0 — голова первой системы.
@@ -369,7 +393,8 @@ export function renderPrintPages(score) {
 
     // --- проход 4: страничная раскладка (вертикальный justify) ---
     const Hh = printH();
-    const sysH = cfg.systemHeight;
+    // Высота системы включает headroom вольт (скобки над станом).
+    const sysH = cfg.systemHeight + vpad;
     const perPage = Math.max(1,
         Math.floor((Hh + SYS_GAP_MIN) / (sysH + SYS_GAP_MIN)));
     const pages = [];
@@ -410,7 +435,8 @@ export function renderPrintPages(score) {
         let y = PAGE.mtop + headOffset;
         for (let k = 0; k < n; k++) {
             drawSystem(VF, ctx, pageSystems[k], measures, cfg, y,
-                effTs, tsStr, effKeys, bars, sysGi, printObjs, printStaves);
+                effTs, tsStr, effKeys, bars, sysGi, printObjs, printStaves,
+                voltas, vpad);
             sysGi++;
             y += sysH + gap;
         }

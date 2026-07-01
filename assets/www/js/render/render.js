@@ -14,7 +14,9 @@ import { effectiveKeys, cancelKeyFor } from '../domain/keysig.js';
 import { effectiveTimeSignatures } from '../domain/timesig.js';
 import { effectiveBarlines } from '../domain/barlines.js';
 import { effectiveRepeatBarlines } from '../domain/repeats.js';
+import { effectiveVoltas } from '../domain/voltas.js';
 import { setupBarline, drawCustomBarline, setupGrandBarline, drawGrandBarline } from './barlines.js';
+import { drawVoltasInBand, voltaHeadroom } from './voltas.js';
 import { Playback } from '../playback/scheduler.js';
 
 function clearCanvas() {
@@ -103,6 +105,13 @@ export function render(score, forcedWidth) {
     // печатью кодом (render/barlines), поэтому экран и PDF совпадают.
     const bars = effectiveRepeatBarlines(measures, effectiveBarlines(measures));
 
+    // Вольты (первая/вторая концовка) — единое разрешение из domain/voltas,
+    // отрисовка общим со страничной печатью кодом (render/voltas). Скобки живут
+    // НАД верхним станом; когда вольты есть, каждая строка получает headroom
+    // (vpad) сверху, чтобы скобка не налезала на предыдущую систему/верх.
+    const voltas = effectiveVoltas(measures);
+    const vpad = voltaHeadroom(voltas);
+
     // Реальная ширина «головы» стана по ФАКТИЧЕСКИМ начальным модификаторам
     // (ключ [+ тональность с бекарами-отменой] [+ размер]), через getNoteStartX
     // временного стана. beginWidth измеряет ровно то, что будет нарисовано —
@@ -157,16 +166,23 @@ export function render(score, forcedWidth) {
         layoutRows.push(items);
     }
     const rows = layoutRows.length;
-    const totalH = rows * rowH + 2 * margin;
+    // Полная высота строки с учётом headroom вольт (vpad резервируется сверху
+    // КАЖДОЙ строки). Плеер/скролл (state.lastLayout) используют rowH2 и
+    // сдвинутый margin, поэтому playhead остаётся выровненным по стану.
+    const rowH2 = rowH + vpad;
+    const totalH = rows * rowH2 + 2 * margin;
     renderer.resize(width, totalH);
 
     // геометрия каждого такта {row, x, w} — для playhead/скролла
     const geom = new Array(measures.length);
+    // Y верхней линейки верхнего стана каждой строки — якорь скобок вольт.
+    const rowTopY = new Array(rows);
 
     // проход 3: распределение ширины по содержимому + отрисовка
     for (let r = 0; r < rows; r++) {
         const items = layoutRows[r];
-        const yTop = margin + r * rowH;
+        // Стан начинается ниже на vpad — над ним остаётся место под скобки вольт.
+        const yTop = margin + r * rowH2 + vpad;
         let sumHead = 0, sumE = 0;
         const es = items.map(function (mi, col) {
             const e = cm[mi] + INNER_PAD;
@@ -202,6 +218,7 @@ export function render(score, forcedWidth) {
                     setupBarline(VF, stave, bars[i]); // правая граница (до draw)
                     stave.setContext(ctx).draw();
                     drawCustomBarline(VF, ctx, stave, bars[i]); // кастомная (после)
+                    if (rowStart) rowTopY[r] = stave.getYForLine(0);
 
                     const cIdx = (cursor.measure === i && cursor.voice === 'perc')
                         ? cursor.index : -1;
@@ -247,6 +264,7 @@ export function render(score, forcedWidth) {
                     treble.setContext(ctx).draw();
                     bass.setContext(ctx).draw();
                     drawGrandBarline(VF, ctx, treble, bass, bars[i]);
+                    if (rowStart) rowTopY[r] = treble.getYForLine(0);
 
                     const tIdx = (cursor.measure === i && cursor.voice === 'treble')
                         ? cursor.index : -1;
@@ -288,14 +306,33 @@ export function render(score, forcedWidth) {
     try { drawScreenDynamics(VF, ctx, score); }
     catch (err) { console.error('drawScreenDynamics failed:', err); }
 
+    // Вольты — отдельным проходом ПОСЛЕ станов (нужны geom тактов и Y верхних
+    // линеек строк). Каждая строка рисуется своей полосой; вольта, растянутая
+    // через перенос строки, ложится сегментом на каждую строку.
+    if (voltas.length) {
+        for (let r = 0; r < rows; r++) {
+            if (rowTopY[r] == null) continue;
+            const inRow = {};
+            for (let c = 0; c < layoutRows[r].length; c++) {
+                const mi = layoutRows[r][c];
+                if (geom[mi]) inRow[mi] = { x: geom[mi].x, w: geom[mi].w };
+            }
+            drawVoltasInBand(ctx, voltas,
+                function (mi) { return inRow[mi] || null; }, rowTopY[r]);
+        }
+    }
+
     // Подсветка выделения при наборе лиги фразировки (slur).
     drawSelectionHighlight(score.selection);
 
     // геометрия раскладки — нужна плееру и автоскроллу.
     // geom[i] = {row, x, w}: число тактов в строке переменное, поэтому
     // строку/координаты такта берём отсюда, а не из фиксированного perRow.
-    state.lastLayout = { width: width, totalH: totalH, rowH: rowH, rows: rows,
-                   geom: geom, margin: margin };
+    // rowH/margin отдаём С учётом headroom вольт: playhead и Follow Playback
+    // считают top строки как margin + row*rowH, а стан сдвинут вниз на vpad —
+    // поэтому в state кладём rowH2 и margin+vpad, и playhead остаётся на стане.
+    state.lastLayout = { width: width, totalH: totalH, rowH: rowH2, rows: rows,
+                   geom: geom, margin: margin + vpad };
 
     // если идёт воспроизведение — пересобрать события под новую раскладку
     Playback.onRender();
