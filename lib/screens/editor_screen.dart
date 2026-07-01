@@ -1821,7 +1821,7 @@ class _EditorScreenState extends State<EditorScreen> {
 // =====================================================================
 //  Панель ввода нот
 // =====================================================================
-class _EditorPanel extends StatelessWidget {
+class _EditorPanel extends StatefulWidget {
   final Score score;
   final EditorCursor cursor;
   final String duration;
@@ -1890,7 +1890,32 @@ class _EditorPanel extends StatelessWidget {
     required this.onSwitchVoice,
   });
 
-  bool get _isDrums => score.instrument == InstrumentType.drums;
+  @override
+  State<_EditorPanel> createState() => _EditorPanelState();
+}
+
+/// Режимы контекстной строки редактора. Одна строка вместо четырёх прежних
+/// (правка + альтерация + динамика + штрихи): режим переключается
+/// сегментированной кнопкой, последний выбор запоминается ([_mode]). Паузу и
+/// «Стереть» держим ВНЕ режимов — они нужны в любом режиме (постоянно видимы).
+enum _CtxMode { edit, pitch, dyn, art }
+
+class _EditorPanelState extends State<_EditorPanel> {
+  // Запомненный режим (сохраняется между перерисовками — не «сбрасывается» на
+  // каждый ввод ноты). По умолчанию — правка (лиги/tuplet/вилки).
+  _CtxMode _mode = _CtxMode.edit;
+
+  bool get _isDrums => widget.score.instrument == InstrumentType.drums;
+
+  // Доступные режимы: у ударных нет альтерации (высота головки не тональная).
+  List<_CtxMode> get _availableModes => _isDrums
+      ? const [_CtxMode.edit, _CtxMode.dyn, _CtxMode.art]
+      : const [_CtxMode.edit, _CtxMode.pitch, _CtxMode.dyn, _CtxMode.art];
+
+  // Фактический режим: если запомненный недоступен (напр. «знак» после
+  // переключения на ударные) — откатываемся к правке, не роняя ассерт.
+  _CtxMode get _effMode =>
+      _availableModes.contains(_mode) ? _mode : _CtxMode.edit;
 
   @override
   Widget build(BuildContext context) {
@@ -1903,31 +1928,20 @@ class _EditorPanel extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _durationRow(context), // Зона 1 — длительности
+              _durationRow(context), // Зона 1 — длительности (постоянно видны)
               const SizedBox(height: 6),
               _fillBar(context), // индикатор заполнения такта (оба инструмента)
-              const SizedBox(height: 6),
-              _editStrip(context), // Зона 2 — редактирование + аккорд-режим
-              // Зона 2б — альтерация (только для клавишных; ударным неприменимо)
-              if (!_isDrums) ...[
-                const SizedBox(height: 6),
-                _accidentalRow(context),
-              ],
-              // Зона 2в — динамика (оба инструмента)
-              const SizedBox(height: 6),
-              _dynamicsRow(context),
-              // Зона 2г — артикуляции (оба инструмента)
-              const SizedBox(height: 6),
-              _articulationRow(context),
+              const SizedBox(height: 8),
+              _contextToolbar(context), // Зона 2 — одна контекстная строка
               const SizedBox(height: 8),
               // Зона 3 — ввод высоты/инструмента (вся ширина, зона большого пальца)
               SizedBox(
                 height: _isDrums ? 76 : 104,
                 child: _isDrums
-                    ? _DrumPad(onInsert: onInsert)
+                    ? _DrumPad(onInsert: widget.onInsert)
                     : PianoKeyboard(
-                        focusOctave: cursor.voice == 'bass' ? 3 : 4,
-                        onInsert: onInsert,
+                        focusOctave: widget.cursor.voice == 'bass' ? 3 : 4,
+                        onInsert: widget.onInsert,
                       ),
               ),
             ],
@@ -1946,13 +1960,13 @@ class _EditorPanel extends StatelessWidget {
         for (final e in durations.entries)
           _durSeg(context,
               label: e.value,
-              selected: duration == e.key,
-              onTap: () => onDuration(e.key)),
+              selected: widget.duration == e.key,
+              onTap: () => widget.onDuration(e.key)),
         _durSeg(context,
             label: '♩.',
-            selected: dots > 0,
+            selected: widget.dots > 0,
             tooltip: 'Нота с точкой',
-            onTap: () => onDots(dots > 0 ? 0 : 1)),
+            onTap: () => widget.onDots(widget.dots > 0 ? 0 : 1)),
       ],
     );
   }
@@ -1998,9 +2012,10 @@ class _EditorPanel extends StatelessWidget {
   // счётчик долей и работает для обоих инструментов). Переполнение — красным.
   Widget _fillBar(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final overfull = filledBeats > totalBeats + 1e-6;
-    final value =
-        totalBeats > 0 ? (filledBeats / totalBeats).clamp(0.0, 1.0) : 0.0;
+    final overfull = widget.filledBeats > widget.totalBeats + 1e-6;
+    final value = widget.totalBeats > 0
+        ? (widget.filledBeats / widget.totalBeats).clamp(0.0, 1.0)
+        : 0.0;
     return ClipRRect(
       borderRadius: BorderRadius.circular(2),
       child: LinearProgressIndicator(
@@ -2012,190 +2027,260 @@ class _EditorPanel extends StatelessWidget {
     );
   }
 
-  // --- Зона 2: редактирование + режимы ----------------------------------
-  // Слева — голос (фортепиано) и курсор ◀▶ (на границе такта он сам переходит
-  // в соседний); номер такта; справа — режимы аккорда/лиг, пауза, удаление.
-  // Кнопок много (Tie/Slur добавили ширины) — строка горизонтально
-  // прокручиваема, чтобы не переполняться на узких экранах (6").
-  Widget _editStrip(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    const tight = BoxConstraints(minWidth: 34, minHeight: 38);
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          if (!_isDrums)
-            SegmentedButton<String>(
-              style: const ButtonStyle(visualDensity: VisualDensity.compact),
-              segments: const [
-                ButtonSegment(value: 'treble', label: Text('𝄞')),
-                ButtonSegment(value: 'bass', label: Text('𝄢')),
+  // --- Зона 2: контекстная строка ---------------------------------------
+  // Одна строка вместо прежних четырёх (правка + знак + динамика + штрих).
+  // Слева — сегментированный переключатель режима; по центру — инструменты
+  // активного режима (прокручиваются); СПРАВА закреплены Пауза и «Стереть» —
+  // они частые (ввод ритма, исправление ошибок) и видимы в любом режиме.
+  Widget _contextToolbar(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _modeSelector(context),
+                const SizedBox(width: 8),
+                ..._modeContent(context),
               ],
-              selected: {cursor.voice},
-              onSelectionChanged: (s) => onSwitchVoice(s.first),
-            ),
-          IconButton(
-            tooltip: 'Назад',
-            visualDensity: VisualDensity.compact,
-            padding: EdgeInsets.zero,
-            constraints: tight,
-            icon: const Icon(Icons.chevron_left),
-            onPressed: () => onMoveNote(-1),
-          ),
-          IconButton(
-            tooltip: 'Вперёд',
-            visualDensity: VisualDensity.compact,
-            padding: EdgeInsets.zero,
-            constraints: tight,
-            icon: const Icon(Icons.chevron_right),
-            onPressed: () => onMoveNote(1),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Text(
-              'Такт ${cursor.measure + 1}/${score.measures.length}',
-              maxLines: 1,
-              style: Theme.of(context).textTheme.labelMedium,
             ),
           ),
-          // Аккорд-режим: залитый фон при активности — постоянный индикатор.
-          IconButton(
-            tooltip: stackMode ? 'Аккорд-режим включён' : 'Аккорд-режим',
-            isSelected: stackMode,
-            visualDensity: VisualDensity.compact,
-            padding: EdgeInsets.zero,
-            constraints: tight,
-            icon: const Icon(Icons.layers_outlined),
-            selectedIcon: const Icon(Icons.layers),
-            style: IconButton.styleFrom(
-              backgroundColor: stackMode ? scheme.secondaryContainer : null,
-              foregroundColor: stackMode ? scheme.onSecondaryContainer : null,
-            ),
-            onPressed: onToggleStack,
-          ),
-          // Tie — лига ДЛИТЕЛЬНОСТИ (тумблер на ноте под курсором).
-          IconButton(
-            tooltip: 'Лига длительности (Tie)',
-            isSelected: tieOnCursor,
-            visualDensity: VisualDensity.compact,
-            padding: EdgeInsets.zero,
-            constraints: tight,
-            icon: const Icon(Icons.link),
-            style: IconButton.styleFrom(
-              backgroundColor: tieOnCursor ? scheme.secondaryContainer : null,
-              foregroundColor: tieOnCursor ? scheme.onSecondaryContainer : null,
-            ),
-            onPressed: canLiga ? onToggleTie : null,
-          ),
-          // Slur — лига ФРАЗИРОВКИ (авто по выделению: якорь -> курсор).
-          IconButton(
-            tooltip: selArmed
-                ? 'Лига фразировки: выберите второй конец'
-                : 'Лига фразировки (Slur)',
-            isSelected: selArmed,
-            visualDensity: VisualDensity.compact,
-            padding: EdgeInsets.zero,
-            constraints: tight,
-            icon: const Icon(Icons.gesture),
-            style: IconButton.styleFrom(
-              backgroundColor: selArmed ? scheme.tertiaryContainer : null,
-              foregroundColor: selArmed ? scheme.onTertiaryContainer : null,
-            ),
-            onPressed: canLiga ? onToggleSlur : null,
-          ),
-          // Tuplet — нестандартная ритмика (операция над выделением). В группе
-          // — снимает её; иначе: якорь -> выбор соотношения 3:2/5:4/…
-          IconButton(
-            tooltip: tupletOnCursor
-                ? 'Убрать tuplet'
-                : (selArmed
-                    ? 'Tuplet: выберите второй конец'
-                    : 'Tuplet (триоль/квинтоль/…)'),
-            isSelected: tupletOnCursor,
-            visualDensity: VisualDensity.compact,
-            padding: EdgeInsets.zero,
-            constraints: tight,
-            icon: const Icon(Icons.data_array),
-            style: IconButton.styleFrom(
-              backgroundColor: tupletOnCursor ? scheme.secondaryContainer : null,
-              foregroundColor:
-                  tupletOnCursor ? scheme.onSecondaryContainer : null,
-            ),
-            onPressed: (canLiga || tupletOnCursor) ? onTuplet : null,
-          ),
-          // Crescendo (<) — вилка нарастания. В вилке — снимает; иначе якорь ->
-          // второй конец (как slur). Подсвечена, когда курсор внутри вилки.
-          IconButton(
-            tooltip: hairpinOnCursor
-                ? 'Убрать вилку'
-                : (selArmed
-                    ? 'Крещендо: выберите второй конец'
-                    : 'Крещендо (<)'),
-            isSelected: hairpinOnCursor,
-            visualDensity: VisualDensity.compact,
-            padding: EdgeInsets.zero,
-            constraints: tight,
-            // Символ вилки-крещендо «<» (та же форма, что рисует движок и что в
-            // подсказке) — читается наравне с 24-px иконками соседей строки.
-            icon: const Text('<',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
-            style: IconButton.styleFrom(
-              backgroundColor: hairpinOnCursor ? scheme.secondaryContainer : null,
-              foregroundColor:
-                  hairpinOnCursor ? scheme.onSecondaryContainer : null,
-            ),
-            onPressed: (canLiga || hairpinOnCursor) ? onHairpinCresc : null,
-          ),
-          // Diminuendo (>) — вилка спада. Поведение симметрично крещендо.
-          IconButton(
-            tooltip: hairpinOnCursor
-                ? 'Убрать вилку'
-                : (selArmed
-                    ? 'Диминуэндо: выберите второй конец'
-                    : 'Диминуэндо (>)'),
-            isSelected: hairpinOnCursor,
-            visualDensity: VisualDensity.compact,
-            padding: EdgeInsets.zero,
-            constraints: tight,
-            // Символ вилки-диминуэндо «>» — симметрично крещендо, читаемо.
-            icon: const Text('>',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
-            style: IconButton.styleFrom(
-              backgroundColor: hairpinOnCursor ? scheme.secondaryContainer : null,
-              foregroundColor:
-                  hairpinOnCursor ? scheme.onSecondaryContainer : null,
-            ),
-            onPressed: (canLiga || hairpinOnCursor) ? onHairpinDim : null,
-          ),
-          IconButton.filledTonal(
-            tooltip: 'Пауза',
-            visualDensity: VisualDensity.compact,
-            padding: EdgeInsets.zero,
-            constraints: tight,
-            icon: const Icon(Icons.music_off),
-            onPressed: onRest,
-          ),
-          IconButton.filledTonal(
-            tooltip: 'Стереть',
-            visualDensity: VisualDensity.compact,
-            padding: EdgeInsets.zero,
-            constraints: tight,
-            icon: const Icon(Icons.backspace_outlined),
-            style: IconButton.styleFrom(
-              backgroundColor: scheme.errorContainer,
-              foregroundColor: scheme.onErrorContainer,
-            ),
-            onPressed: onDelete,
-          ),
-        ],
-      ),
+        ),
+        const SizedBox(width: 4),
+        _restButton(context),
+        const SizedBox(width: 2),
+        _deleteButton(context),
+      ],
     );
   }
 
-  /// Зона альтерации: ставит знак на ноту под курсором (per-notehead модель).
-  /// Применяется только к выделенной/текущей ноте. Активный знак подсвечен.
-  /// Используются нативные глифы; рисует знаки VexFlow на стане сам движок.
-  Widget _accidentalRow(BuildContext context) {
+  // Сегментированный (M3) выбор режима строки. Глиф-иконки узкие, подпись — в
+  // подсказке; «галочку выбора» скрываем, чтобы сегменты не расширялись.
+  Widget _modeSelector(BuildContext context) {
+    const labels = <_CtxMode, String>{
+      _CtxMode.edit: 'Правка',
+      _CtxMode.pitch: 'Знак',
+      _CtxMode.dyn: 'Динамика',
+      _CtxMode.art: 'Штрихи',
+    };
+    return SegmentedButton<_CtxMode>(
+      showSelectedIcon: false,
+      style: const ButtonStyle(
+        visualDensity: VisualDensity.compact,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      segments: [
+        for (final m in _availableModes)
+          ButtonSegment(value: m, tooltip: labels[m], label: _modeGlyph(m)),
+      ],
+      selected: {_effMode},
+      onSelectionChanged: (s) => setState(() => _mode = s.first),
+    );
+  }
+
+  Widget _modeGlyph(_CtxMode m) => switch (m) {
+        _CtxMode.edit => const Icon(Icons.edit_note, size: 20),
+        _CtxMode.pitch => const Text('♯', style: TextStyle(fontSize: 17)),
+        _CtxMode.dyn => const Text('ƒ',
+            style: TextStyle(fontSize: 17, fontStyle: FontStyle.italic)),
+        _CtxMode.art => const Text('>',
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+      };
+
+  // Инструменты активного режима (без Паузы/«Стереть» — те закреплены справа).
+  List<Widget> _modeContent(BuildContext context) => switch (_effMode) {
+        _CtxMode.edit => _editItems(context),
+        _CtxMode.pitch => _accidentalItems(context),
+        _CtxMode.dyn => _dynamicItems(context),
+        _CtxMode.art => _articulationItems(context),
+      };
+
+  // Режим «Правка»: голос (фортепиано), аккорд-режим, шаг курсора ◀▶, лиги,
+  // tuplet, вилки. На границе такта ◀▶ сам переходит в соседний такт.
+  List<Widget> _editItems(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    const tight = BoxConstraints(minWidth: 34, minHeight: 38);
+    return [
+      if (!_isDrums)
+        SegmentedButton<String>(
+          showSelectedIcon: false,
+          style: const ButtonStyle(visualDensity: VisualDensity.compact),
+          segments: const [
+            ButtonSegment(value: 'treble', label: Text('𝄞')),
+            ButtonSegment(value: 'bass', label: Text('𝄢')),
+          ],
+          selected: {widget.cursor.voice},
+          onSelectionChanged: (s) => widget.onSwitchVoice(s.first),
+        ),
+      IconButton(
+        tooltip: 'Назад',
+        visualDensity: VisualDensity.compact,
+        padding: EdgeInsets.zero,
+        constraints: tight,
+        icon: const Icon(Icons.chevron_left),
+        onPressed: () => widget.onMoveNote(-1),
+      ),
+      IconButton(
+        tooltip: 'Вперёд',
+        visualDensity: VisualDensity.compact,
+        padding: EdgeInsets.zero,
+        constraints: tight,
+        icon: const Icon(Icons.chevron_right),
+        onPressed: () => widget.onMoveNote(1),
+      ),
+      // Аккорд-режим: залитый фон при активности — постоянный индикатор.
+      IconButton(
+        tooltip: widget.stackMode ? 'Аккорд-режим включён' : 'Аккорд-режим',
+        isSelected: widget.stackMode,
+        visualDensity: VisualDensity.compact,
+        padding: EdgeInsets.zero,
+        constraints: tight,
+        icon: const Icon(Icons.layers_outlined),
+        selectedIcon: const Icon(Icons.layers),
+        style: IconButton.styleFrom(
+          backgroundColor: widget.stackMode ? scheme.secondaryContainer : null,
+          foregroundColor:
+              widget.stackMode ? scheme.onSecondaryContainer : null,
+        ),
+        onPressed: widget.onToggleStack,
+      ),
+      // Tie — лига ДЛИТЕЛЬНОСТИ (тумблер на ноте под курсором).
+      IconButton(
+        tooltip: 'Лига длительности (Tie)',
+        isSelected: widget.tieOnCursor,
+        visualDensity: VisualDensity.compact,
+        padding: EdgeInsets.zero,
+        constraints: tight,
+        icon: const Icon(Icons.link),
+        style: IconButton.styleFrom(
+          backgroundColor:
+              widget.tieOnCursor ? scheme.secondaryContainer : null,
+          foregroundColor:
+              widget.tieOnCursor ? scheme.onSecondaryContainer : null,
+        ),
+        onPressed: widget.canLiga ? widget.onToggleTie : null,
+      ),
+      // Slur — лига ФРАЗИРОВКИ (авто по выделению: якорь -> курсор).
+      IconButton(
+        tooltip: widget.selArmed
+            ? 'Лига фразировки: выберите второй конец'
+            : 'Лига фразировки (Slur)',
+        isSelected: widget.selArmed,
+        visualDensity: VisualDensity.compact,
+        padding: EdgeInsets.zero,
+        constraints: tight,
+        icon: const Icon(Icons.gesture),
+        style: IconButton.styleFrom(
+          backgroundColor: widget.selArmed ? scheme.tertiaryContainer : null,
+          foregroundColor:
+              widget.selArmed ? scheme.onTertiaryContainer : null,
+        ),
+        onPressed: widget.canLiga ? widget.onToggleSlur : null,
+      ),
+      // Tuplet — нестандартная ритмика (операция над выделением).
+      IconButton(
+        tooltip: widget.tupletOnCursor
+            ? 'Убрать tuplet'
+            : (widget.selArmed
+                ? 'Tuplet: выберите второй конец'
+                : 'Tuplet (триоль/квинтоль/…)'),
+        isSelected: widget.tupletOnCursor,
+        visualDensity: VisualDensity.compact,
+        padding: EdgeInsets.zero,
+        constraints: tight,
+        icon: const Icon(Icons.data_array),
+        style: IconButton.styleFrom(
+          backgroundColor:
+              widget.tupletOnCursor ? scheme.secondaryContainer : null,
+          foregroundColor:
+              widget.tupletOnCursor ? scheme.onSecondaryContainer : null,
+        ),
+        onPressed:
+            (widget.canLiga || widget.tupletOnCursor) ? widget.onTuplet : null,
+      ),
+      // Crescendo (<) — вилка нарастания (в вилке — снимает; иначе якорь ->
+      // второй конец, как slur). Подсвечена, когда курсор внутри вилки.
+      IconButton(
+        tooltip: widget.hairpinOnCursor
+            ? 'Убрать вилку'
+            : (widget.selArmed
+                ? 'Крещендо: выберите второй конец'
+                : 'Крещендо (<)'),
+        isSelected: widget.hairpinOnCursor,
+        visualDensity: VisualDensity.compact,
+        padding: EdgeInsets.zero,
+        constraints: tight,
+        icon: const Text('<',
+            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
+        style: IconButton.styleFrom(
+          backgroundColor:
+              widget.hairpinOnCursor ? scheme.secondaryContainer : null,
+          foregroundColor:
+              widget.hairpinOnCursor ? scheme.onSecondaryContainer : null,
+        ),
+        onPressed: (widget.canLiga || widget.hairpinOnCursor)
+            ? widget.onHairpinCresc
+            : null,
+      ),
+      // Diminuendo (>) — вилка спада. Поведение симметрично крещендо.
+      IconButton(
+        tooltip: widget.hairpinOnCursor
+            ? 'Убрать вилку'
+            : (widget.selArmed
+                ? 'Диминуэндо: выберите второй конец'
+                : 'Диминуэндо (>)'),
+        isSelected: widget.hairpinOnCursor,
+        visualDensity: VisualDensity.compact,
+        padding: EdgeInsets.zero,
+        constraints: tight,
+        icon: const Text('>',
+            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
+        style: IconButton.styleFrom(
+          backgroundColor:
+              widget.hairpinOnCursor ? scheme.secondaryContainer : null,
+          foregroundColor:
+              widget.hairpinOnCursor ? scheme.onSecondaryContainer : null,
+        ),
+        onPressed: (widget.canLiga || widget.hairpinOnCursor)
+            ? widget.onHairpinDim
+            : null,
+      ),
+    ];
+  }
+
+  // Пауза — закреплена справа (нужна в любом режиме при вводе ритма).
+  Widget _restButton(BuildContext context) => IconButton.filledTonal(
+        tooltip: 'Пауза',
+        visualDensity: VisualDensity.compact,
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(minWidth: 34, minHeight: 38),
+        icon: const Icon(Icons.music_off),
+        onPressed: widget.onRest,
+      );
+
+  // «Стереть» — закреплена справа, окрашена в error-контейнер (частое действие
+  // исправления; отделена от режимов, чтобы всегда быть под рукой).
+  Widget _deleteButton(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return IconButton.filledTonal(
+      tooltip: 'Стереть',
+      visualDensity: VisualDensity.compact,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 34, minHeight: 38),
+      icon: const Icon(Icons.backspace_outlined),
+      style: IconButton.styleFrom(
+        backgroundColor: scheme.errorContainer,
+        foregroundColor: scheme.onErrorContainer,
+      ),
+      onPressed: widget.onDelete,
+    );
+  }
+
+  /// Режим «Знак»: ставит альтерацию на ноту под курсором (per-notehead модель).
+  /// Применяется только к текущей ноте. Активный знак подсвечен. Заголовок
+  /// строки не нужен — категорию называет сегмент-переключатель («Знак»).
+  List<Widget> _accidentalItems(BuildContext context) {
     const items = <(Accidental, String, String)>[
       (Accidental.none, '♮?', 'Без знака (по тональности)'),
       (Accidental.natural, '♮', 'Бекар'),
@@ -2205,45 +2290,34 @@ class _EditorPanel extends StatelessWidget {
       (Accidental.doubleFlat, '𝄫', 'Дубль-бемоль'),
     ];
     final scheme = Theme.of(context).colorScheme;
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(right: 6, left: 2),
-            child: Text('Знак',
-                style: Theme.of(context).textTheme.labelMedium),
-          ),
-          for (final (acc, glyph, tip) in items)
-            Padding(
-              padding: const EdgeInsets.only(right: 4),
-              child: () {
-                final active = cursorAccidental == acc;
-                return SizedBox(
-                  height: 38,
-                  child: TextButton(
-                    style: TextButton.styleFrom(
-                      visualDensity: VisualDensity.compact,
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      minimumSize: const Size(34, 38),
-                      backgroundColor:
-                          active ? scheme.secondaryContainer : null,
-                      foregroundColor: active
-                          ? scheme.onSecondaryContainer
-                          : scheme.onSurface,
-                    ),
-                    onPressed: canLiga ? () => onAccidental(acc) : null,
-                    child: Tooltip(
-                      message: tip,
-                      child: Text(glyph, style: const TextStyle(fontSize: 18)),
-                    ),
-                  ),
-                );
-              }(),
-            ),
-        ],
-      ),
-    );
+    return [
+      for (final (acc, glyph, tip) in items)
+        Padding(
+          padding: const EdgeInsets.only(right: 4),
+          child: () {
+            final active = widget.cursorAccidental == acc;
+            return SizedBox(
+              height: 38,
+              child: TextButton(
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  minimumSize: const Size(34, 38),
+                  backgroundColor: active ? scheme.secondaryContainer : null,
+                  foregroundColor:
+                      active ? scheme.onSecondaryContainer : scheme.onSurface,
+                ),
+                onPressed:
+                    widget.canLiga ? () => widget.onAccidental(acc) : null,
+                child: Tooltip(
+                  message: tip,
+                  child: Text(glyph, style: const TextStyle(fontSize: 18)),
+                ),
+              ),
+            );
+          }(),
+        ),
+    ];
   }
 
   /// Зона артикуляций: переключает знак (staccato/staccatissimo/accent/marcato/
@@ -2251,7 +2325,10 @@ class _EditorPanel extends StatelessWidget {
   /// снимает; несколько совместимых знаков сосуществуют. Влияние на playback
   /// (длительность/громкость/атака) движок считает сам (единое место). Доступно
   /// обоим инструментам (ударным accent/marcato особенно полезны).
-  Widget _articulationRow(BuildContext context) {
+  /// Режим «Штрихи»: переключает артикуляцию (toggle) на ноте под курсором;
+  /// несколько совместимых знаков сосуществуют. Заголовок не нужен — категорию
+  /// называет сегмент-переключатель.
+  List<Widget> _articulationItems(BuildContext context) {
     const items = <(Articulation, String, String)>[
       (Articulation.staccato, '𝅭', 'Стаккато'),
       (Articulation.staccatissimo, '𝆓', 'Стаккатиссимо'),
@@ -2260,92 +2337,70 @@ class _EditorPanel extends StatelessWidget {
       (Articulation.tenuto, '–', 'Тенуто'),
     ];
     final scheme = Theme.of(context).colorScheme;
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(right: 6, left: 2),
-            child: Text('Штрих',
-                style: Theme.of(context).textTheme.labelMedium),
-          ),
-          for (final (art, glyph, tip) in items)
-            Padding(
-              padding: const EdgeInsets.only(right: 4),
-              child: () {
-                final active = cursorArticulations.contains(art);
-                return SizedBox(
-                  height: 38,
-                  child: TextButton(
-                    style: TextButton.styleFrom(
-                      visualDensity: VisualDensity.compact,
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      minimumSize: const Size(34, 38),
-                      backgroundColor:
-                          active ? scheme.secondaryContainer : null,
-                      foregroundColor: active
-                          ? scheme.onSecondaryContainer
-                          : scheme.onSurface,
-                    ),
-                    onPressed: canLiga ? () => onArticulation(art) : null,
-                    child: Tooltip(
-                      message: tip,
-                      child: Text(glyph, style: const TextStyle(fontSize: 18)),
-                    ),
-                  ),
-                );
-              }(),
-            ),
-        ],
-      ),
-    );
+    return [
+      for (final (art, glyph, tip) in items)
+        Padding(
+          padding: const EdgeInsets.only(right: 4),
+          child: () {
+            final active = widget.cursorArticulations.contains(art);
+            return SizedBox(
+              height: 38,
+              child: TextButton(
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  minimumSize: const Size(34, 38),
+                  backgroundColor: active ? scheme.secondaryContainer : null,
+                  foregroundColor:
+                      active ? scheme.onSecondaryContainer : scheme.onSurface,
+                ),
+                onPressed:
+                    widget.canLiga ? () => widget.onArticulation(art) : null,
+                child: Tooltip(
+                  message: tip,
+                  child: Text(glyph, style: const TextStyle(fontSize: 18)),
+                ),
+              ),
+            );
+          }(),
+        ),
+    ];
   }
 
-  /// Зона динамики: ставит оттенок (ppp..fff) на долю ноты под курсором.
+  /// Режим «Динамика»: ставит оттенок (ppp..fff) на долю ноты под курсором.
   /// Оттенок действует до следующего знака; громкость воспроизведения движок
   /// разрешает сам. Активный оттенок подсвечен; повторный тап — снимает.
-  Widget _dynamicsRow(BuildContext context) {
+  List<Widget> _dynamicItems(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(right: 6, left: 2),
-            child: Text('Динам.',
-                style: Theme.of(context).textTheme.labelMedium),
-          ),
-          for (final mark in DynamicMark.values)
-            Padding(
-              padding: const EdgeInsets.only(right: 4),
-              child: () {
-                final active = cursorDynamic == mark;
-                return SizedBox(
-                  height: 38,
-                  child: TextButton(
-                    style: TextButton.styleFrom(
-                      visualDensity: VisualDensity.compact,
-                      padding: const EdgeInsets.symmetric(horizontal: 10),
-                      minimumSize: const Size(38, 38),
-                      backgroundColor:
-                          active ? scheme.secondaryContainer : null,
-                      foregroundColor: active
-                          ? scheme.onSecondaryContainer
-                          : scheme.onSurface,
-                    ),
-                    onPressed: canDynamic ? () => onDynamic(mark) : null,
-                    child: Text(mark.label,
-                        style: const TextStyle(
-                            fontSize: 16,
-                            fontStyle: FontStyle.italic,
-                            fontWeight: FontWeight.bold)),
-                  ),
-                );
-              }(),
-            ),
-        ],
-      ),
-    );
+    return [
+      for (final mark in DynamicMark.values)
+        Padding(
+          padding: const EdgeInsets.only(right: 4),
+          child: () {
+            final active = widget.cursorDynamic == mark;
+            return SizedBox(
+              height: 38,
+              child: TextButton(
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  minimumSize: const Size(38, 38),
+                  backgroundColor: active ? scheme.secondaryContainer : null,
+                  foregroundColor:
+                      active ? scheme.onSecondaryContainer : scheme.onSurface,
+                ),
+                onPressed:
+                    widget.canDynamic ? () => widget.onDynamic(mark) : null,
+                child: Text(mark.label,
+                    style: const TextStyle(
+                        fontSize: 16,
+                        fontStyle: FontStyle.italic,
+                        fontWeight: FontWeight.bold)),
+              ),
+            );
+          }(),
+        ),
+    ];
   }
 }
 
