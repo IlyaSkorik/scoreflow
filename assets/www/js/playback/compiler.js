@@ -7,6 +7,7 @@ import { sameKeys } from '../domain/notes.js';
 import { resolveMidi } from '../domain/pitch.js';
 import { keySignatureAlterations, effectiveKeys } from '../domain/keysig.js';
 import { velocityTimeline, velocityAt } from '../domain/dynamics.js';
+import { applyArticulations } from '../domain/articulations.js';
 import {
     effectiveTimeSignatures, measureCapacityQ, measureStarts, metronomeClicks,
 } from '../domain/timesig.js';
@@ -167,6 +168,13 @@ export function compilePlayback(payload) {
                     // голоса на эту долю (mf, если оттенков нет). При tie-merge
                     // событие-голова сохраняет свой velocity (атака — одна).
                     velocity: velocityAt(timelines[v], base + acc),
+                    // Выразительные поля playback-события. attack/release — для
+                    // будущей гуманизации; артикуляции нот несут финальный слой
+                    // (см. applyArticulations ниже). Значения по умолчанию —
+                    // нейтральные (1), поэтому события без артикуляций не меняются.
+                    attack: 1,
+                    release: 1,
+                    articulations: (n.art || []),
                 });
                 acc += q;
             }
@@ -177,6 +185,16 @@ export function compilePlayback(payload) {
     // уже на общей beat-сетке). Slur на playback НЕ влияет.
     events = mergeTies(events);
     events.sort(function (a, b) { return a.startBeat - b.startBeat; });
+
+    // Артикуляции — ПОСЛЕДНИЙ выразительный слой ПОСЛЕ динамики/вилок и tie-merge:
+    // домножают длительность/громкость/атаку уже разрешённого события. Правила и
+    // константы — в domain/articulations (единое место). Scheduler читает те же
+    // durationBeats/velocity — планировщик НЕ меняется. Считаем на ЛИНЕЙНЫХ
+    // событиях (до repeat/volta-разворота); развёрнутые копии наследуют поля.
+    for (let i = 0; i < events.length; i++) {
+        const e = events[i];
+        if (e.articulations && e.articulations.length) applyArticulations(e, e.articulations);
+    }
 
     // Repeat expansion — единственное место, где playback узнаёт о репризах.
     // Scheduler получает уже расширенные events/starts/clicks и не содержит
