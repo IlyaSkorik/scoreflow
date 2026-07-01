@@ -219,20 +219,22 @@ function drawSystem(VF, ctx, sys, yTop, env) {
                 .setType(VF.StaveConnector.type.SINGLE_LEFT).setContext(ctx).draw();
         }
 
-        // Номер первого такта системы (кроме такта 0) — издательская
-        // конвенция: мелкий КУРСИВНЫЙ serif НАД КЛЮЧОМ, с воздухом; при
-        // вольтах/темпе/навигации/высоких нотах первого такта поднимается
-        // над всем стеком (место зарезервировано в padTop системы).
+        // Номер первого такта системы (кроме такта 0) — мелкий курсивный
+        // serif НИЗКО над станом, выключенный ВЛЕВО от начала системы
+        // (заканчивается перед ключом). Ноты, крюк/номер вольты, темп и
+        // навигация живут правее/выше — номер ни с чем не пересекается и
+        // не требует подъёма в межсистемный интервал.
         if (isFirst && sys.firstMeasure > 0) {
             const size = env.geom.fontU(MNUM_PX);
-            const lift = env.topClearOf(idx)
-                + (env.voltaMeasures[idx] ? env.vpad : 0)
-                + (env.tempoMeasures[idx] ? env.tpad : 0)
-                + (env.navMeasures[idx] ? env.npad : 0);
+            const label = String(sys.firstMeasure + 1);
             ctx.save();
             ctx.setFont('serif', size, 'italic');
-            ctx.fillText(String(sys.firstMeasure + 1),
-                x + 1, staves[0].getYForLine(0) - lift - MNUM_GAP);
+            let tw = label.length * size * 0.5;
+            try {
+                const m = ctx.measureText(label);
+                if (m && m.width > 0) tw = m.width;
+            } catch (e) { /* оценка выше */ }
+            ctx.fillText(label, x - 3 - tw, staves[0].getYForLine(0) - MNUM_GAP);
             ctx.restore();
         }
 
@@ -435,13 +437,10 @@ export function renderPrintPages(score) {
             dynBottom: dynBottom,
             stackOf: stackOf,
         });
-        // Резерв под номер такта: он стоит НАД стеком меток/выступами нот
-        // ПЕРВОГО такта системы (см. drawSystem) и не должен вылезать за
-        // верхний отступ системы на предыдущую систему/титульный блок.
+        // Резерв под номер такта: сидит низко над станом слева от системы
+        // (см. drawSystem) — системе достаточно места на высоту текста.
         if (sys.firstMeasure > 0) {
-            const mi0 = sys.firstMeasure;
-            const need = topClearOf(mi0) + stackOf(mi0)
-                + MNUM_GAP + geom.fontU(MNUM_PX) + 3;
+            const need = MNUM_GAP + geom.fontU(MNUM_PX) + 2;
             if (need > sys.pro.padTop) {
                 sys.pro.height += need - sys.pro.padTop;
                 sys.pro.padTop = need;
