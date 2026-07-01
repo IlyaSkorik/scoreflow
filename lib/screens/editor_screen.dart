@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -108,6 +109,18 @@ class _EditorScreenState extends State<EditorScreen> {
   InAppWebViewController? _web;
   bool _ready = false;
 
+  // Создание платформенной WebView — тяжёлая операция; во время анимации
+  // перехода она давала бы фриз. Пока false — на месте партитуры оверлей
+  // загрузки, WebView монтируется только после завершения перехода.
+  bool _routeSettled = false;
+  // Первый реальный кадр партитуры отрисован (сигнал onRendered из движка) —
+  // до этого оверлей скрывает белую пустую страницу WebView.
+  bool _engineRendered = false;
+  Animation<double>? _routeAnim;
+  // Страховка: если движок не поднялся (сервер/JS), снимаем оверлей, чтобы
+  // показать собственный фолбэк WebView, а не вечный спиннер.
+  Timer? _overlayFailSafe;
+
   Score? _score;
   final EditorCursor _cursor = EditorCursor();
   final ScoreHistory _history = ScoreHistory();
@@ -131,7 +144,47 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_routeSettled || _routeAnim != null) return;
+    final anim = ModalRoute.of(context)?.animation;
+    if (anim == null || anim.isCompleted) {
+      _routeSettled = true;
+      _armOverlayFailSafe();
+    } else {
+      _routeAnim = anim;
+      anim.addStatusListener(_onRouteAnimStatus);
+    }
+  }
+
+  void _onRouteAnimStatus(AnimationStatus status) {
+    if (status != AnimationStatus.completed) return;
+    _routeAnim?.removeStatusListener(_onRouteAnimStatus);
+    _routeAnim = null;
+    if (!mounted) return;
+    setState(() => _routeSettled = true);
+    _armOverlayFailSafe();
+  }
+
+  void _armOverlayFailSafe() {
+    _overlayFailSafe ??= Timer(const Duration(seconds: 10), () {
+      if (mounted && !_engineRendered) {
+        setState(() => _engineRendered = true);
+      }
+    });
+  }
+
+  /// Первый кадр партитуры готов — плавно убираем оверлей загрузки.
+  void _onEngineRendered() {
+    if (!mounted || _engineRendered) return;
+    _overlayFailSafe?.cancel();
+    setState(() => _engineRendered = true);
+  }
+
+  @override
   void dispose() {
+    _routeAnim?.removeStatusListener(_onRouteAnimStatus);
+    _overlayFailSafe?.cancel();
     // Останавливаем звук при выходе из редактора.
     _web?.evaluateJavascript(
       source: "window.handlePlaybackCommand('PAUSE', 0);",
@@ -1701,68 +1754,44 @@ class _EditorScreenState extends State<EditorScreen> {
       body: Column(
         children: [
           Expanded(
-            child: Container(
-              color: Colors.white,
-              child: InAppWebView(
-                initialUrlRequest: URLRequest(url: WebUri(kEngineUrl)),
-                initialSettings: InAppWebViewSettings(
-                  javaScriptEnabled: true,
-                  transparentBackground: false,
-                  supportZoom: false,
-                  // Разрешаем Web Audio стартовать без прямого DOM-жеста
-                  // (воспроизведение запускается через мост из Flutter).
-                  mediaPlaybackRequiresUserGesture: false,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                // WebView монтируем ПОСЛЕ анимации перехода: инфляция
+                // платформенной вьюхи + загрузка движка не должны красть
+                // кадры у перехода (главный источник «лага при открытии»).
+                if (_routeSettled) _buildEngineView(),
+                // Оверлей в цветах темы: скрывает белую страницу движка до
+                // первого кадра партитуры, затем плавно растворяется.
+                IgnorePointer(
+                  ignoring: _engineRendered,
+                  child: AnimatedOpacity(
+                    opacity: _engineRendered ? 0 : 1,
+                    duration: const Duration(milliseconds: 250),
+                    child: ColoredBox(
+                      color: Theme.of(context).colorScheme.surface,
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const CircularProgressIndicator(),
+                            const SizedBox(height: 16),
+                            Text(
+                              'Готовим партитуру…',
+                              style: Theme.of(context).textTheme.bodyMedium
+                                  ?.copyWith(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
+                                  ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-                onWebViewCreated: (c) {
-                  _web = c;
-                  // Тап по ноте/паузе на партитуре -> перемещение курсора.
-                  c.addJavaScriptHandler(
-                    handlerName: 'onNoteTap',
-                    callback: (args) {
-                      if (args.isEmpty || args.first is! Map) return;
-                      final data = args.first as Map;
-                      _onNoteTap(
-                        (data['measure'] as num).toInt(),
-                        data['voice'] as String,
-                        (data['index'] as num).toInt(),
-                      );
-                    },
-                  );
-                  // Движок сообщает об окончании воспроизведения -> сброс кнопки.
-                  c.addJavaScriptHandler(
-                    handlerName: 'onPlaybackEnded',
-                    callback: (args) {
-                      if (mounted && _isPlaying) {
-                        setState(() {
-                          _isPlaying = false;
-                          _liveTempo = null; // вернуть показ начального темпа
-                        });
-                      }
-                    },
-                  );
-                  // Движок сообщает ДЕЙСТВУЮЩИЙ темп под плейхедом (смены `_tempo`).
-                  // Чип темпа «привязан к партитуре»: во время игры показывает его.
-                  c.addJavaScriptHandler(
-                    handlerName: 'onTempo',
-                    callback: (args) {
-                      if (!mounted || args.isEmpty) return;
-                      final bpm = (args.first as num?)?.toInt();
-                      if (bpm != null && _isPlaying && bpm != _liveTempo) {
-                        setState(() => _liveTempo = bpm);
-                      }
-                    },
-                  );
-                },
-                onLoadStop: (c, url) {
-                  _ready = true;
-                  _render();
-                  _maybeLoadSamples();
-                },
-                onReceivedError: (c, request, error) => debugPrint(
-                  'WebView error: ${error.type} ${error.description} (${request.url})',
-                ),
-                onConsoleMessage: (c, msg) => debugPrint('JS: ${msg.message}'),
-              ),
+              ],
             ),
           ),
           // Во время воспроизведения панель ввода скрывается — партитура и
@@ -1824,6 +1853,83 @@ class _EditorScreenState extends State<EditorScreen> {
         onRedo: _redo,
         onTempoTap: _showMoreSheet,
         onOpenMore: _showMoreSheet,
+      ),
+    );
+  }
+
+  /// Нотная область: WebView с движком VexFlow. Белая подложка — «бумага»
+  /// партитуры (движок рендерит на белом фоне).
+  Widget _buildEngineView() {
+    return Container(
+      color: Colors.white,
+      child: InAppWebView(
+        initialUrlRequest: URLRequest(url: WebUri(kEngineUrl)),
+        initialSettings: InAppWebViewSettings(
+          javaScriptEnabled: true,
+          transparentBackground: false,
+          supportZoom: false,
+          // Разрешаем Web Audio стартовать без прямого DOM-жеста
+          // (воспроизведение запускается через мост из Flutter).
+          mediaPlaybackRequiresUserGesture: false,
+        ),
+        onWebViewCreated: (c) {
+          _web = c;
+          // Тап по ноте/паузе на партитуре -> перемещение курсора.
+          c.addJavaScriptHandler(
+            handlerName: 'onNoteTap',
+            callback: (args) {
+              if (args.isEmpty || args.first is! Map) return;
+              final data = args.first as Map;
+              _onNoteTap(
+                (data['measure'] as num).toInt(),
+                data['voice'] as String,
+                (data['index'] as num).toInt(),
+              );
+            },
+          );
+          // Движок сообщает об окончании воспроизведения -> сброс кнопки.
+          c.addJavaScriptHandler(
+            handlerName: 'onPlaybackEnded',
+            callback: (args) {
+              if (mounted && _isPlaying) {
+                setState(() {
+                  _isPlaying = false;
+                  _liveTempo = null; // вернуть показ начального темпа
+                });
+              }
+            },
+          );
+          // Движок сообщает ДЕЙСТВУЮЩИЙ темп под плейхедом (смены `_tempo`).
+          // Чип темпа «привязан к партитуре»: во время игры показывает его.
+          c.addJavaScriptHandler(
+            handlerName: 'onTempo',
+            callback: (args) {
+              if (!mounted || args.isEmpty) return;
+              final bpm = (args.first as num?)?.toInt();
+              if (bpm != null && _isPlaying && bpm != _liveTempo) {
+                setState(() => _liveTempo = bpm);
+              }
+            },
+          );
+          // Первый кадр партитуры отрисован — снимаем оверлей загрузки.
+          c.addJavaScriptHandler(
+            handlerName: 'onRendered',
+            callback: (args) => _onEngineRendered(),
+          );
+        },
+        onLoadStop: (c, url) {
+          _ready = true;
+          _render();
+          _maybeLoadSamples();
+        },
+        onReceivedError: (c, request, error) {
+          debugPrint(
+            'WebView error: ${error.type} ${error.description} (${request.url})',
+          );
+          // Показываем фолбэк WebView вместо вечного спиннера.
+          _onEngineRendered();
+        },
+        onConsoleMessage: (c, msg) => debugPrint('JS: ${msg.message}'),
       ),
     );
   }

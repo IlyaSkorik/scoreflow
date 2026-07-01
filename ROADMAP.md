@@ -314,6 +314,11 @@ Secondary goals:
 * [x] Articulation editor
 * [x] Tempo editor
 * [x] Navigation editor
+* [x] Smooth score opening
+
+  * WebView engine mounts after the page transition (no jank during the push animation)
+  * Themed loading overlay until the first rendered frame (engine `onRendered` callback)
+
 * [x] Score library
 
   * Create

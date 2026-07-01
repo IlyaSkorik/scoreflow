@@ -27,6 +27,11 @@ window.ScoreFlow = {
             const json = decodeURIComponent(escape(window.atob(b64)));
             state.lastPayload = JSON.parse(json);
             render(state.lastPayload);
+            // Сообщаем Flutter, что партитура отрисована: редактор снимает
+            // оверлей загрузки после ПЕРВОГО реального кадра, а не по load.
+            if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                window.flutter_inappwebview.callHandler('onRendered');
+            }
         } catch (e) {
             showError('Ошибка разбора партитуры: ' + e.message);
         }
