@@ -19,8 +19,10 @@ import { effectiveTimeSignatures } from '../domain/timesig.js';
 import { effectiveBarlines } from '../domain/barlines.js';
 import { effectiveRepeatBarlines } from '../domain/repeats.js';
 import { effectiveVoltas } from '../domain/voltas.js';
+import { readTempoMarks } from '../domain/tempo.js';
 import { setupBarline, drawCustomBarline, drawGrandBarline } from './barlines.js';
 import { drawVoltasInBand, voltaHeadroom } from './voltas.js';
+import { drawTempos, tempoHeadroom } from './tempo.js';
 import { drawDynamic } from './dynamics.js';
 import { dynamicsBaseline } from './dynamics_layout.js';
 import { noteOnsets, indexAtBeat, readHairpins } from '../domain/dynamics.js';
@@ -126,11 +128,12 @@ function drawTitle(ctx, title, composer) {
 // номер системы, [registry] — реестр noteId -> {sn, ctx, sys} для
 // последующего прохода лиг (Tie/Slur), общий на всю печать.
 function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
-                    effKeys, bars, sysIndex, registry, staveReg, voltas, vpad) {
+                    effKeys, bars, sysIndex, registry, staveReg, voltas, vpad,
+                    tempoMarks, tpad) {
     let x = PAGE.mx;
-    // Станы опускаем на vpad — над ними резервируется место под скобки вольт.
-    const staveY = yTop + (vpad || 0);
-    // Боксы тактов {x,w} и Y верхней линейки — для прохода вольт этой системы.
+    // Станы опускаем на vpad+tpad — над ними место под вольты и темповые метки.
+    const staveY = yTop + (vpad || 0) + (tpad || 0);
+    // Боксы тактов {x,w} и Y верхней линейки — для прохода вольт/темпа системы.
     const voltaBoxes = {};
     let bandTopY = null;
     // Тональность головы системы (+ бекары-отмена, если система начинается со
@@ -280,6 +283,33 @@ function drawSystem(VF, ctx, sys, measures, cfg, yTop, effTs, tsStr,
         drawVoltasInBand(ctx, voltas,
             function (mi) { return voltaBoxes[mi] || null; }, bandTopY);
     }
+
+    // Темповые метки этой системы — общим со экраном кодом (render/tempo), НАД
+    // вольтами (bandTopY - vpad - зазор). X доли — из позиции ноты (реестр),
+    // иначе левый край такта. Рисуем только метки тактов этой системы.
+    if (tempoMarks && tempoMarks.length && bandTopY != null) {
+        const voices = cfg.staves.map(function (st) { return st.voice; });
+        const primary = voices[0];
+        const sysMarks = tempoMarks.filter(function (m) { return voltaBoxes[m.measure]; });
+        drawTempos({
+            VF: VF,
+            marks: sysMarks,
+            rowOf: function () { return 0; },
+            baselineOf: function () { return bandTopY - (vpad || 0) - 8; },
+            ctxOf: function () { return ctx; },
+            xOf: function (mi, beat) {
+                const notes = (measures[mi] && measures[mi][primary]) || [];
+                const idx = indexAtBeat(noteOnsets(notes), beat);
+                if (idx >= 0) {
+                    const obj = registry[mi + ':' + primary + ':' + idx];
+                    if (obj && obj.sn) {
+                        try { return obj.sn.getAbsoluteX(); } catch (e) { /* fallthrough */ }
+                    }
+                }
+                return voltaBoxes[mi] ? voltaBoxes[mi].x + 2 : null;
+            },
+        });
+    }
 }
 
 // Главный вход постраничной вёрстки: строит страницы A4 в #print-root,
@@ -308,6 +338,10 @@ export function renderPrintPages(score) {
     // (vpad) сверху под скобки.
     const voltas = effectiveVoltas(measures);
     const vpad = voltaHeadroom(voltas);
+    // Темповые метки (♩ = N) — единое разрешение из domain/tempo, отрисовка общим
+    // со экраном кодом (render/tempo). Живут НАД вольтами (доп. headroom tpad).
+    const tempoMarks = readTempoMarks(measures);
+    const tpad = tempoHeadroom(tempoMarks);
     if (measures.length === 0) return 0;
     // Смена тональности / размера на такте i>0 (для ширины и отрисовки в
     // середине системы). Размер на такте 0 — голова первой системы.
@@ -395,8 +429,8 @@ export function renderPrintPages(score) {
 
     // --- проход 4: страничная раскладка (вертикальный justify) ---
     const Hh = printH();
-    // Высота системы включает headroom вольт (скобки над станом).
-    const sysH = cfg.systemHeight + vpad;
+    // Высота системы включает headroom вольт и темпа (метки над станом).
+    const sysH = cfg.systemHeight + vpad + tpad;
     const perPage = Math.max(1,
         Math.floor((Hh + SYS_GAP_MIN) / (sysH + SYS_GAP_MIN)));
     const pages = [];
@@ -438,7 +472,7 @@ export function renderPrintPages(score) {
         for (let k = 0; k < n; k++) {
             drawSystem(VF, ctx, pageSystems[k], measures, cfg, y,
                 effTs, tsStr, effKeys, bars, sysGi, printObjs, printStaves,
-                voltas, vpad);
+                voltas, vpad, tempoMarks, tpad);
             sysGi++;
             y += sysH + gap;
         }

@@ -15,8 +15,11 @@ import { effectiveTimeSignatures } from '../domain/timesig.js';
 import { effectiveBarlines } from '../domain/barlines.js';
 import { effectiveRepeatBarlines } from '../domain/repeats.js';
 import { effectiveVoltas } from '../domain/voltas.js';
+import { readTempoMarks } from '../domain/tempo.js';
+import { noteOnsets, indexAtBeat } from '../domain/dynamics.js';
 import { setupBarline, drawCustomBarline, setupGrandBarline, drawGrandBarline } from './barlines.js';
 import { drawVoltasInBand, voltaHeadroom } from './voltas.js';
+import { drawTempos, tempoHeadroom } from './tempo.js';
 import { Playback } from '../playback/scheduler.js';
 
 function clearCanvas() {
@@ -111,6 +114,11 @@ export function render(score, forcedWidth) {
     // (vpad) сверху, чтобы скобка не налезала на предыдущую систему/верх.
     const voltas = effectiveVoltas(measures);
     const vpad = voltaHeadroom(voltas);
+    // Темповые метки (♩ = N) — единое разрешение из domain/tempo, отрисовка общим
+    // со страничной печатью кодом (render/tempo). Живут НАД вольтами; когда они
+    // есть, строка получает доп. headroom (tpad) поверх voltapad.
+    const tempoMarks = readTempoMarks(measures);
+    const tpad = tempoHeadroom(tempoMarks);
 
     // Реальная ширина «головы» стана по ФАКТИЧЕСКИМ начальным модификаторам
     // (ключ [+ тональность с бекарами-отменой] [+ размер]), через getNoteStartX
@@ -166,10 +174,11 @@ export function render(score, forcedWidth) {
         layoutRows.push(items);
     }
     const rows = layoutRows.length;
-    // Полная высота строки с учётом headroom вольт (vpad резервируется сверху
-    // КАЖДОЙ строки). Плеер/скролл (state.lastLayout) используют rowH2 и
-    // сдвинутый margin, поэтому playhead остаётся выровненным по стану.
-    const rowH2 = rowH + vpad;
+    // Полная высота строки с учётом headroom вольт (vpad) и темпа (tpad),
+    // резервируемых сверху КАЖДОЙ строки. Плеер/скролл (state.lastLayout)
+    // используют rowH2 и сдвинутый margin, поэтому playhead остаётся на стане.
+    const toppad = vpad + tpad;
+    const rowH2 = rowH + toppad;
     const totalH = rows * rowH2 + 2 * margin;
     renderer.resize(width, totalH);
 
@@ -181,8 +190,8 @@ export function render(score, forcedWidth) {
     // проход 3: распределение ширины по содержимому + отрисовка
     for (let r = 0; r < rows; r++) {
         const items = layoutRows[r];
-        // Стан начинается ниже на vpad — над ним остаётся место под скобки вольт.
-        const yTop = margin + r * rowH2 + vpad;
+        // Стан начинается ниже на toppad — над ним место под вольты и темп.
+        const yTop = margin + r * rowH2 + toppad;
         let sumHead = 0, sumE = 0;
         const es = items.map(function (mi, col) {
             const e = cm[mi] + INNER_PAD;
@@ -322,6 +331,35 @@ export function render(score, forcedWidth) {
         }
     }
 
+    // Темповые метки — отдельным проходом ПОСЛЕ станов (нужны geom тактов, X нот
+    // и Y верхних линеек). Метка стоит НАД вольтами (rowTopY - vpad - зазор).
+    // X доли берём из позиции ноты (state.noteHitIndex), общий слой render/tempo.
+    if (tempoMarks.length) {
+        const primary = isDrums ? 'perc' : 'treble';
+        drawTempos({
+            VF: VF,
+            marks: tempoMarks,
+            rowOf: function (mi) { return geom[mi] ? geom[mi].row : null; },
+            baselineOf: function (r) {
+                return rowTopY[r] == null ? null : rowTopY[r] - vpad - 8;
+            },
+            ctxOf: function () { return ctx; },
+            xOf: function (mi, beat) { return tempoXAtBeat(mi, primary, beat); },
+        });
+    }
+
+    function tempoXAtBeat(mi, voice, beat) {
+        const g = geom[mi];
+        if (!g) return null;
+        const notes = (measures[mi] && measures[mi][voice]) || [];
+        const idx = indexAtBeat(noteOnsets(notes), beat);
+        if (idx >= 0) {
+            const hb = state.noteHitIndex[mi + ':' + voice + ':' + idx];
+            if (hb) return hb.x;
+        }
+        return g.x + 2; // fallback — левый край такта
+    }
+
     // Подсветка выделения при наборе лиги фразировки (slur).
     drawSelectionHighlight(score.selection);
 
@@ -332,7 +370,7 @@ export function render(score, forcedWidth) {
     // считают top строки как margin + row*rowH, а стан сдвинут вниз на vpad —
     // поэтому в state кладём rowH2 и margin+vpad, и playhead остаётся на стане.
     state.lastLayout = { width: width, totalH: totalH, rowH: rowH2, rows: rows,
-                   geom: geom, margin: margin + vpad };
+                   geom: geom, margin: margin + toppad };
 
     // если идёт воспроизведение — пересобрать события под новую раскладку
     Playback.onRender();
