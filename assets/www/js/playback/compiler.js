@@ -11,7 +11,7 @@ import { applyArticulations } from '../domain/articulations.js';
 import {
     effectiveTimeSignatures, measureCapacityQ, measureStarts, metronomeClicks,
 } from '../domain/timesig.js';
-import { expandMeasureOrder } from '../domain/repeats.js';
+import { expandPlaybackOrder } from '../domain/navigation.js';
 import { buildTempoMap, tempoSpq } from '../domain/tempo.js';
 
 // Tie-merge для playback: внутри каждого голоса (события уже в порядке
@@ -197,11 +197,11 @@ export function compilePlayback(payload, baseTempoOverride) {
         if (e.articulations && e.articulations.length) applyArticulations(e, e.articulations);
     }
 
-    // Repeat expansion — единственное место, где playback узнаёт о репризах.
-    // Scheduler получает уже расширенные events/starts/clicks и не содержит
-    // repeat branches. Missing start repeat обрабатывает domain/repeats как
-    // повтор с начала; missing end repeat не меняет порядок.
-    const measureOrder = expandMeasureOrder(measures);
+    // Разворот порядка — единственное место, где playback узнаёт о репризах,
+    // вольтах И навигации. domain/navigation оборачивает repeat/volta-разворот
+    // (expandMeasureOrder) навигационным слоем (D.C./D.S./Fine/To Coda). Scheduler
+    // получает уже развёрнутые events/starts/clicks и не содержит навигации.
+    const measureOrder = expandPlaybackOrder(measures);
     const expanded = expandEvents(events, measureOrder, starts, capsQ, effTs);
 
     // Tempo mapping — ЕДИНСТВЕННОЕ место превращения долей в АБСОЛЮТНОЕ время.
