@@ -183,6 +183,94 @@ class Dynamic {
   int get hashCode => Object.hash(mark, voice, beat);
 }
 
+/// Тип вилки (hairpin): постепенное изменение громкости в диапазоне.
+/// [crescendo] — нарастание (<), [diminuendo] — спад (>). Расширяемо до
+/// niente/кастомных вилок добавлением значений.
+enum HairpinType {
+  crescendo,
+  diminuendo;
+
+  String get id => name;
+
+  static HairpinType fromId(String? id) => switch (id) {
+        'diminuendo' => HairpinType.diminuendo,
+        _ => HairpinType.crescendo,
+      };
+}
+
+/// Вилка (crescendo/diminuendo) — FIRST-CLASS нотационный объект-ДИАПАЗОН,
+/// РАСШИРЯЮЩИЙ систему динамики (не заменяющий её). НЕ свойство ноты и НЕ оттенок:
+/// вилка задаёт ПЛАВНОЕ изменение громкости между двумя ритмическими позициями.
+/// Привязана к музыкальному ВРЕМЕНИ (такт+доля обоих концов) — как [Dynamic], и
+/// так же переживает reflow (перепривязка по абсолютной доле, см. reflowHairpins).
+///
+/// Громкость вилка НЕ считает: playback-компилятор движка (domain/dynamics.
+/// velocityTimeline + velocityAt) ИНТЕРПОЛИРУЕТ velocity между активным оттенком
+/// в начале вилки и целевым в конце — ЕДИНОЕ место разрешения громкости, без
+/// дублирования. Этот объект описывает лишь ЧТО и ГДЕ записано.
+///
+/// [voice] — голос вилки; [startMeasure] задаётся контейнером ([Measure] хранит
+/// вилку на своём такте-начале), поэтому в объекте не дублируется. [startBeat]/
+/// [endBeat] — доли (в ЧЕТВЕРТЯХ) от начала своего такта; [endMeasure] — индекс
+/// такта-конца. Future-ready: niente/expression/кривые лягут доп. полями без
+/// переделки модели, компилятора или рендера.
+class Hairpin {
+  final HairpinType type;
+  final String voice;
+  final double startBeat;
+  final int endMeasure;
+  final double endBeat;
+
+  const Hairpin({
+    required this.type,
+    required this.voice,
+    required this.startBeat,
+    required this.endMeasure,
+    required this.endBeat,
+  });
+
+  Hairpin copy() => Hairpin(
+        type: type,
+        voice: voice,
+        startBeat: startBeat,
+        endMeasure: endMeasure,
+        endBeat: endBeat,
+      );
+
+  /// Persistence-JSON и render-проекция СОВПАДАЮТ (движок читает `type`/`voice`/
+  /// `sb`/`em`/`eb`): вилка не имеет отдельного «глифа-vs-структуры», как у ноты.
+  /// startMeasure задаётся контейнером (ключ такта), поэтому в объект не пишется.
+  Map<String, dynamic> toJson() => {
+        'type': type.id,
+        'voice': voice,
+        'sb': startBeat,
+        'em': endMeasure,
+        'eb': endBeat,
+      };
+
+  Map<String, dynamic> toRenderJson() => toJson();
+
+  factory Hairpin.fromJson(Map<String, dynamic> j) => Hairpin(
+        type: HairpinType.fromId(j['type'] as String?),
+        voice: j['voice'] as String? ?? 'treble',
+        startBeat: (j['sb'] as num?)?.toDouble() ?? 0,
+        endMeasure: j['em'] as int? ?? 0,
+        endBeat: (j['eb'] as num?)?.toDouble() ?? 0,
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      other is Hairpin &&
+      other.type == type &&
+      other.voice == voice &&
+      (other.startBeat - startBeat).abs() < 1e-9 &&
+      other.endMeasure == endMeasure &&
+      (other.endBeat - endBeat).abs() < 1e-9;
+
+  @override
+  int get hashCode => Object.hash(type, voice, startBeat, endMeasure, endBeat);
+}
+
 /// Тип тактовой черты (barline) — ОТДЕЛЬНАЯ модель и FIRST-CLASS нотационный
 /// объект, как в MuseScore/Dorico/Finale. НЕ свойство рендера: черта привязана к
 /// ГРАНИЦЕ такта (его ПРАВОМУ краю — end barline) и переживает reflow как
@@ -697,21 +785,31 @@ class Measure {
   /// граница. Позиционный якорь по номеру такта (переживает reflow).
   Volta? volta;
 
+  /// Вилки (crescendo/diminuendo), НАЧИНАющиеся с этого такта. Диапазонные
+  /// объекты (см. [Hairpin]), РАСШИРЯЮТ динамику. Привязаны к музыкальному времени
+  /// и переживают reflow перепривязкой по абсолютной доле (reflowHairpins) —
+  /// ПАРАЛЛЕЛЬНО оттенкам ([dynamics]), а не по индексу такта. Хранятся под
+  /// зарезервированным ключом `_hair`.
+  final List<Hairpin> hairpins;
+
   static const String _dynKey = '_dyn';
   static const String _keyKey = '_key';
   static const String _tsKey = '_ts';
   static const String _barKey = '_bar';
   static const String _repeatKey = '_repeat';
   static const String _voltaKey = '_volta';
+  static const String _hairKey = '_hair';
 
   Measure(this.voices,
       {Map<String, List<Dynamic>>? dynamics,
+      List<Hairpin>? hairpins,
       this.keySignature,
       this.timeSignature,
       this.barline,
       this.repeat,
       this.volta})
-      : dynamics = dynamics ?? {};
+      : dynamics = dynamics ?? {},
+        hairpins = hairpins ?? [];
 
   factory Measure.empty(InstrumentType instrument) => Measure({
         for (final v in instrument.voiceIds) v: <MusicNote>[],
@@ -740,6 +838,7 @@ class Measure {
         barline: barline,
         repeat: repeat,
         volta: volta?.copy(),
+        hairpins: hairpins.map((h) => h.copy()).toList(),
       );
 
   /// JSON оттенков по голосам (только непустые списки) — общий для persistence
@@ -762,6 +861,9 @@ class Measure {
     if (barline != null && !barline!.isDefault) j[_barKey] = barline!.id;
     if (repeat != null) j[_repeatKey] = repeat!.id;
     if (volta != null) j[_voltaKey] = volta!.toJson();
+    if (hairpins.isNotEmpty) {
+      j[_hairKey] = hairpins.map((h) => h.toJson()).toList();
+    }
     return j;
   }
 
@@ -783,12 +885,16 @@ class Measure {
     if (barline != null && !barline!.isDefault) j[_barKey] = barline!.id;
     if (repeat != null) j[_repeatKey] = repeat!.id;
     if (volta != null) j[_voltaKey] = volta!.toRenderJson();
+    if (hairpins.isNotEmpty) {
+      j[_hairKey] = hairpins.map((h) => h.toRenderJson()).toList();
+    }
     return j;
   }
 
   factory Measure.fromJson(Map<String, dynamic> j) {
     final voices = <String, List<MusicNote>>{};
     final dynamics = <String, List<Dynamic>>{};
+    final hairpins = <Hairpin>[];
     String? keySignature;
     TimeSignature? timeSignature;
     BarlineType? barline;
@@ -827,12 +933,19 @@ class Measure {
         volta = v == null ? null : Volta.fromJson(v as Map<String, dynamic>);
         continue;
       }
+      if (entry.key == _hairKey) {
+        for (final e in (entry.value as List)) {
+          hairpins.add(Hairpin.fromJson(e as Map<String, dynamic>));
+        }
+        continue;
+      }
       voices[entry.key] = (entry.value as List)
           .map((e) => MusicNote.fromJson(e as Map<String, dynamic>))
           .toList();
     }
     return Measure(voices,
         dynamics: dynamics,
+        hairpins: hairpins,
         keySignature: keySignature,
         timeSignature: timeSignature,
         barline: barline,
