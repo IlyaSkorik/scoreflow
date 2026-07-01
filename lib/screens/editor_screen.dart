@@ -32,6 +32,10 @@ const String _kInheritTime = '__inherit_ts__';
 /// Служебное значение пикера размера «Другой…» (ввод произвольного n/d).
 const String _kCustomTime = '__custom_ts__';
 
+/// Служебное значение пикера темпа «Другое…» (ввод произвольного BPM). Отрицат.
+/// sentinel — не пересекается с реальными bpm (20..400).
+const int _kCustomTempo = -1;
+
 /// Подписи типов тактовой черты для пикера в листе «Ещё». Порядок = порядок
 /// показа (обычная -> двойная/финальная -> штриховая/пунктирная -> засечка/
 /// короткая -> невидимая). Расширяется добавлением значений в [BarlineType]
@@ -320,6 +324,7 @@ class _EditorScreenState extends State<EditorScreen> {
     // Делаем ДО подмены s.measures — источник позиций — прежняя раскладка.
     reflowDynamicsVariable(s.measures, measures, measureQAt);
     reflowHairpinsVariable(s.measures, measures, measureQAt);
+    reflowTemposVariable(s.measures, measures, measureQAt);
     s.measures = measures;
 
     // вернуть курсор на ту же ноту (или подровнять в границы)
@@ -1182,6 +1187,74 @@ class _EditorScreenState extends State<EditorScreen> {
     });
   }
 
+  // --- Смена темпа (♩ = N) ---------------------------------------------
+
+  /// Доля курсора внутри такта (четверти): онсет ноты под курсором, иначе 0
+  /// (начало такта). Позиция, к которой привязывается смена темпа.
+  double get _cursorBeat =>
+      _cursorOnNote ? onsetBeats(_activeVoice, _cursor.index) : 0.0;
+
+  /// Смена темпа на позиции курсора (такт + доля), либо null.
+  TempoMark? get _cursorTempo {
+    final list = _score!.measures[_cursor.measure].tempos;
+    for (final t in list) {
+      if ((t.beat - _cursorBeat).abs() < 1e-6) return t;
+    }
+    return null;
+  }
+
+  /// Инструмент «Темп»: вставка/замена/снятие смены темпа на позиции курсора.
+  /// [bpm]==null — снять. Смена темпа — нотационный объект на ритмической
+  /// позиции; playback-время из неё строит движок (единый tempo map),
+  /// scheduler темп не считает. Идёт через обычный пайплайн (_commit ->
+  /// normalize -> render -> persist -> Undo/Redo); переживает reflow по времени.
+  void _setTempoMark(int? bpm) {
+    final m = _cursor.measure;
+    final beat = _cursorBeat;
+    _commit(() {
+      final list = _score!.measures[m].tempos;
+      final at = list.indexWhere((t) => (t.beat - beat).abs() < 1e-6);
+      if (bpm == null) {
+        if (at >= 0) list.removeAt(at);
+      } else if (at >= 0) {
+        list[at] = list[at].withBpm(bpm);
+      } else {
+        list
+          ..add(TempoMark(bpm: bpm, beat: beat))
+          ..sort((a, b) => a.beat.compareTo(b.beat));
+      }
+    });
+  }
+
+  /// Диалог ввода произвольного BPM (20..400). null — отмена.
+  Future<int?> _pickCustomBpm(int current) async {
+    final controller = TextEditingController(text: '$current');
+    return showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Темп (BPM)'),
+        content: TextField(
+          controller: controller,
+          keyboardType: TextInputType.number,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: '20–400'),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Отмена')),
+          FilledButton(
+            onPressed: () {
+              final v = int.tryParse(controller.text.trim());
+              Navigator.pop(ctx, (v != null && v >= 20 && v <= 400) ? v : null);
+            },
+            child: const Text('ОК'),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Нижний лист «Ещё» — редкие действия вне рабочей зоны: точный темп,
   /// sustain (фортепиано), параметры партитуры (тональность/размер),
   /// добавление такта, переименование, экспорт PDF.
@@ -1415,6 +1488,46 @@ class _EditorScreenState extends State<EditorScreen> {
                       ],
                       onChanged: (v) {
                         _setMeasureVolta(v);
+                        setSheet(() {});
+                      },
+                    ),
+                  );
+                }),
+                // Смена темпа (♩ = N) на позиции курсора (такт + доля ноты).
+                // Пресеты + произвольный BPM; playback-время строит движок.
+                Builder(builder: (ctx) {
+                  final m = _cursor.measure;
+                  final cur = _cursorTempo?.bpm;
+                  const presets = [40, 60, 80, 100, 120, 140, 160];
+                  final inPreset = cur != null && presets.contains(cur);
+                  return ListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                    leading: const Icon(Icons.speed),
+                    title: Text('Темп ♩= (такт ${m + 1})'),
+                    subtitle: cur != null && !inPreset ? Text('$cur BPM') : null,
+                    trailing: DropdownButton<int?>(
+                      // value = null / пресет / произвольный bpm — совпадает
+                      // РОВНО с одним пунктом; «Другое…» (_kCustomTempo) с value
+                      // не совпадает (bpm положителен), поэтому дубля значения нет.
+                      value: cur,
+                      hint: const Text('Нет'),
+                      items: [
+                        const DropdownMenuItem<int?>(value: null, child: Text('Нет')),
+                        for (final p in presets)
+                          DropdownMenuItem<int?>(value: p, child: Text('$p')),
+                        if (cur != null && !inPreset)
+                          DropdownMenuItem<int?>(
+                              value: cur, child: Text('$cur (своё)')),
+                        const DropdownMenuItem<int?>(
+                            value: _kCustomTempo, child: Text('Другое…')),
+                      ],
+                      onChanged: (v) async {
+                        if (v == _kCustomTempo) {
+                          final custom = await _pickCustomBpm(cur ?? 120);
+                          if (custom != null) _setTempoMark(custom);
+                        } else {
+                          _setTempoMark(v);
+                        }
                         setSheet(() {});
                       },
                     ),

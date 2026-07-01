@@ -119,6 +119,31 @@ void reflowHairpinsVariable(
   }
 }
 
+/// Перепривязывает СМЕНЫ ТЕМПА (♩ = N) к НОВОЙ раскладке тактов по АБСОЛЮТНОЙ
+/// доле — так же, как [reflowDynamicsVariable] для оттенков (темп живёт в том же
+/// музыкальном времени). Точечный якорь (одна доля), поэтому логика проще вилок:
+/// абсолютная доля -> новый такт + локальная доля.
+void reflowTemposVariable(
+    List<Measure> from, List<Measure> to, double Function(int) measureQAt) {
+  for (final m in to) {
+    m.tempos.clear();
+  }
+  if (to.isEmpty) return;
+  final fromStarts = measureStarts(from.length, measureQAt);
+  final toStarts = measureStarts(to.length, measureQAt);
+  for (var mi = 0; mi < from.length; mi++) {
+    for (final t in from[mi].tempos) {
+      final abs = fromStarts[mi] + t.beat;
+      final idx = measureIndexAtBeat(toStarts, abs);
+      to[idx].tempos.add(TempoMark(
+        bpm: t.bpm,
+        beatUnit: t.beatUnit,
+        beat: abs - toStarts[idx],
+      ));
+    }
+  }
+}
+
 /// Перепривязка оттенков при ЕДИНОМ размере по всей партитуре (обратная
 /// совместимость): [measureQ] — четвертей в такте, одинаково для всех тактов.
 /// Тонкая обёртка над [reflowDynamicsVariable] — без дублирования логики.
