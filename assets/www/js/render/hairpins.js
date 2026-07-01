@@ -15,11 +15,10 @@
 
 const COLOR = '#000000';
 const LINE_W = 1.3;
-// Половина раствора клина на широком конце (px). Полная высота устья = 2×.
+// Половина раствора клина на широком конце (px) по умолчанию (экран).
+// Полная высота устья = 2×. Центр клина опускается ниже базовой линии на
+// полураствор, чтобы не наезжать на глифы динамики (рисуются вверх от линии).
 export const HAIRPIN_HALF = 5;
-// Сдвиг центра клина ВНИЗ от базовой линии оттенков: клин целиком ниже линии,
-// чтобы не наезжать на глифы динамики (они рисуются вверх от базовой линии).
-const CENTER_DROP = HAIRPIN_HALF;
 
 // Нарисовать участок клина между xa..xb с полураствором halfA/halfB вокруг центра
 // [yc]. Две симметричные линии (верхняя и нижняя грань клина).
@@ -43,12 +42,17 @@ export function drawHairpinPart(ctx, xa, xb, yc, halfA, halfB) {
 //   baselineOf(row, voice) : Y базовой линии оттенков группы (или null)
 //   xAtBeat(mi, voice, localBeat) : X доли внутри такта (или null)
 //   ctxOf(row) : графический контекст этой строки/системы
+//   half (опц.)             : полураствор устья (по умолчанию HAIRPIN_HALF);
+//                             печать просит больший — издательский раствор
+//                             клина (~3 мм) при гравировочном масштабе
 // Вилка, попавшая на несколько систем, режется по строкам; полураствор на каждом
-// конце сегмента = HAIRPIN_HALF × доля_положения (для crescendo — растёт слева
+// конце сегмента = half × доля_положения (для crescendo — растёт слева
 // направо, для diminuendo — наоборот), поэтому клин непрерывен через разрыв.
 export function drawHairpins(spec) {
     const hairpins = spec.hairpins || [];
     const starts = spec.starts || [];
+    const half = spec.half || HAIRPIN_HALF;
+    const drop = half; // клин целиком ниже базовой линии (не наезжает на глифы)
     for (let i = 0; i < hairpins.length; i++) {
         const h = hairpins[i];
         const em = h.endMeasure;
@@ -82,9 +86,9 @@ export function drawHairpins(spec) {
             const beatB = atEnd ? endAbs : starts[rm + 1];
             const fA = (beatA - startAbs) / total;
             const fB = (beatB - startAbs) / total;
-            const gapA = HAIRPIN_HALF * (h.type === 'diminuendo' ? (1 - fA) : fA);
-            const gapB = HAIRPIN_HALF * (h.type === 'diminuendo' ? (1 - fB) : fB);
-            drawHairpinPart(ctx, xa, xb, base + CENTER_DROP, gapA, gapB);
+            const gapA = half * (h.type === 'diminuendo' ? (1 - fA) : fA);
+            const gapB = half * (h.type === 'diminuendo' ? (1 - fB) : fB);
+            drawHairpinPart(ctx, xa, xb, base + drop, gapA, gapB);
         }
     }
 }
