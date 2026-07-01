@@ -23,7 +23,9 @@ import { setupBarline, drawCustomBarline, drawGrandBarline } from './barlines.js
 import { drawVoltasInBand, voltaHeadroom } from './voltas.js';
 import { drawDynamic } from './dynamics.js';
 import { dynamicsBaseline } from './dynamics_layout.js';
-import { noteOnsets, indexAtBeat } from '../domain/dynamics.js';
+import { noteOnsets, indexAtBeat, readHairpins } from '../domain/dynamics.js';
+import { measureCapacityQ, measureStarts } from '../domain/timesig.js';
+import { drawHairpins } from './hairpins.js';
 
 const PAGE = { W: 794, H: 1123, mx: 56, mtop: 72, mbot: 56 }; // A4 @96dpi
 const MEASURE_PAD = 16;    // правый запас в такте (дыхание/барлайн)
@@ -446,8 +448,9 @@ export function renderPrintPages(score) {
     try { drawPrintTiesAndSlurs(VF, score, printObjs); }
     catch (err) { console.error('drawPrintTiesAndSlurs failed:', err); }
 
-    // Динамические оттенки — отдельным проходом (позиции нот и станы готовы).
-    try { drawPrintDynamics(VF, score, printObjs, printStaves); }
+    // Динамические оттенки и вилки — отдельным проходом (позиции нот и станы
+    // готовы). effTs передаём для абсолютной сетки долей (геометрия вилок).
+    try { drawPrintDynamics(VF, score, printObjs, printStaves, effTs); }
     catch (err) { console.error('drawPrintDynamics failed:', err); }
 
     return pages.length;
@@ -457,7 +460,7 @@ export function renderPrintPages(score) {
 // одна базовая линия на (система+голос), под нотами, без столкновений. Геометрию
 // берём из VF (StaveNote.getBoundingBox / Stave.getYForLine), позицию СЧИТАЕТ
 // общий слой — поэтому PDF и экран совпадают.
-function drawPrintDynamics(VF, score, registry, staveReg) {
+function drawPrintDynamics(VF, score, registry, staveReg, effTs) {
     const measures = score.measures || [];
     const voices = voiceListOf(score);
 
@@ -517,6 +520,61 @@ function drawPrintDynamics(VF, score, registry, staveReg) {
                 drawDynamic(VF, sr.ctx, x, y, d.mark);
             }
         }
+    }
+
+    // --- 5. Вилки (cresc./dim.) — общий слой render/hairpins (тот же код, что и
+    //         на экране). Аксессоры печати: sys как «строка», станы/ноты — из
+    //         реестров. Абсолютная сетка долей — из effTs. ---
+    const hairpins = readHairpins(measures);
+    if (hairpins.length) {
+        const topVoice = voices[0];
+        const capsQ = (effTs || []).map(measureCapacityQ);
+        const starts = measureStarts(capsQ);
+        const staveOf = function (mi) {
+            const sr = staveReg[mi + ':' + topVoice];
+            return sr ? sr.stave : null;
+        };
+        drawHairpins({
+            hairpins: hairpins,
+            starts: starts,
+            rowOf: function (mi) {
+                const sr = staveReg[mi + ':' + topVoice];
+                return sr ? sr.sys : null;
+            },
+            geomOf: function (mi) {
+                const s = staveOf(mi);
+                if (!s) return null;
+                try { return { x: s.getX(), w: s.getWidth() }; } catch (e) { return null; }
+            },
+            baselineOf: function (sys, v) {
+                const y = baseline[sys + ':' + v];
+                return y == null ? null : y;
+            },
+            xAtBeat: function (mi, v, b) {
+                const notes = (measures[mi] && measures[mi][v]) || [];
+                const idx = indexAtBeat(noteOnsets(notes), b);
+                if (idx >= 0) {
+                    const obj = registry[mi + ':' + v + ':' + idx];
+                    if (obj && obj.sn) {
+                        try { return obj.sn.getAbsoluteX(); } catch (e) { /* fallthrough */ }
+                    }
+                }
+                const s = staveOf(mi);
+                if (!s) return null;
+                const q = capsQ[mi] || 4;
+                try {
+                    return s.getNoteStartX() + (q > 0 ? (b / q) : 0) *
+                        (s.getX() + s.getWidth() - s.getNoteStartX());
+                } catch (e) { return null; }
+            },
+            ctxOf: function (sys) {
+                // ctx системы: у любого стана этой системы он общий.
+                for (const k in staveReg) {
+                    if (staveReg[k].sys === sys) return staveReg[k].ctx;
+                }
+                return null;
+            },
+        });
     }
 }
 

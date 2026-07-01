@@ -8,8 +8,10 @@
 // Печатный проход живёт в print.js и вызывает общий примитив drawDynamic.
 import { state } from '../utils/state.js';
 import { voiceListOf } from '../domain/notes.js';
-import { DYNAMIC_GLYPH, noteOnsets, indexAtBeat } from '../domain/dynamics.js';
+import { DYNAMIC_GLYPH, noteOnsets, indexAtBeat, readHairpins } from '../domain/dynamics.js';
+import { effectiveTimeSignatures, measureCapacityQ, measureStarts } from '../domain/timesig.js';
 import { dynamicsBaseline, DYN_GLYPH_SIZE } from './dynamics_layout.js';
+import { drawHairpins } from './hairpins.js';
 
 // Рисует строку-оттенок [markId] нотным шрифтом по ЦЕНТРУ x на базовой линии y.
 // Каждая буква (p/m/f/…) — отдельный SMuFL-глиф; ширина берётся из метрик глифа
@@ -102,4 +104,46 @@ export function drawScreenDynamics(VF, ctx, score) {
             }
         }
     }
+
+    // --- 4. Вилки (cresc./dim.) — ТОТ ЖЕ базовый уровень, что и оттенки. X доли
+    //         берём из позиций нот (state.noteHitIndex), геометрию клина считает
+    //         общий слой render/hairpins (тот же код, что и для PDF). ---
+    drawScreenHairpins(ctx, measures, geom, baseline, score.timeSignature || '4/4');
+}
+
+// X центра доли [localBeat] такта [mi]/[v] на экране: центр ноты этой доли из
+// общего реестра позиций (state.noteHitIndex); если ноты на доле нет —
+// пропорционально ширине такта (fallback). Возвращает X или null.
+function screenXAtBeat(measures, geom, mi, v, localBeat, capsQ) {
+    const notes = (measures[mi] && measures[mi][v]) || [];
+    const idx = indexAtBeat(noteOnsets(notes), localBeat);
+    if (idx >= 0) {
+        const hb = state.noteHitIndex[mi + ':' + v + ':' + idx];
+        if (hb) return hb.x + hb.w / 2;
+    }
+    const g = geom[mi];
+    if (!g) return null;
+    const q = capsQ[mi] || 4;
+    return g.x + (q > 0 ? (localBeat / q) : 0) * g.w;
+}
+
+// Экранный проход вилок — строит аксессоры и делегирует в общий drawHairpins.
+function drawScreenHairpins(ctx, measures, geom, baseline, tsStr) {
+    const hairpins = readHairpins(measures);
+    if (!hairpins.length) return;
+    const effTs = effectiveTimeSignatures(measures, tsStr);
+    const capsQ = effTs.map(measureCapacityQ);
+    const starts = measureStarts(capsQ);
+    drawHairpins({
+        hairpins: hairpins,
+        starts: starts,
+        rowOf: function (mi) { return geom[mi] ? geom[mi].row : null; },
+        geomOf: function (mi) { return geom[mi] ? { x: geom[mi].x, w: geom[mi].w } : null; },
+        baselineOf: function (row, v) {
+            const y = baseline[row + ':' + v];
+            return y == null ? null : y;
+        },
+        xAtBeat: function (mi, v, b) { return screenXAtBeat(measures, geom, mi, v, b, capsQ); },
+        ctxOf: function () { return ctx; },
+    });
 }
