@@ -14,12 +14,33 @@ import '../widgets/metronome_icon.dart';
 
 /// Тональности для пикера в листе «Ещё» (формат VexFlow keySignature).
 const List<String> _keySignatures = [
-  'C', 'G', 'D', 'A', 'E', 'B', 'F#', 'F', 'Bb', 'Eb', 'Ab', 'Db'
+  'C',
+  'G',
+  'D',
+  'A',
+  'E',
+  'B',
+  'F#',
+  'F',
+  'Bb',
+  'Eb',
+  'Ab',
+  'Db',
 ];
 
 /// Размеры такта (пресеты) для пикера в листе «Ещё».
 const List<String> _timeSignatures = [
-  '2/4', '3/4', '4/4', '5/4', '6/8', '7/8', '9/8', '12/8', '2/2', '3/8', '5/8'
+  '2/4',
+  '3/4',
+  '4/4',
+  '5/4',
+  '6/8',
+  '7/8',
+  '9/8',
+  '12/8',
+  '2/2',
+  '3/8',
+  '5/8',
 ];
 
 /// Подписи типов тактовой черты для пикера в листе «Ещё». Порядок = порядок
@@ -92,7 +113,8 @@ class _EditorScreenState extends State<EditorScreen> {
   final ScoreHistory _history = ScoreHistory();
   String _duration = 'q';
   int _dots = 0; // 0 = без точки, 1 = пунктир (модель расширяема до 2–3)
-  bool _stackMode = false; // Аккорд-режим: ввод наращивает созвучие, не двигая курсор
+  bool _stackMode =
+      false; // Аккорд-режим: ввод наращивает созвучие, не двигая курсор
   // Якорь выделения диапазона (общий для slur и tuplet): первый конец. null —
   // не активен. Не часть документа — живёт только в сессии редактирования.
   EditorCursor? _selAnchor;
@@ -111,7 +133,9 @@ class _EditorScreenState extends State<EditorScreen> {
   @override
   void dispose() {
     // Останавливаем звук при выходе из редактора.
-    _web?.evaluateJavascript(source: "window.handlePlaybackCommand('PAUSE', 0);");
+    _web?.evaluateJavascript(
+      source: "window.handlePlaybackCommand('PAUSE', 0);",
+    );
     super.dispose();
   }
 
@@ -205,11 +229,11 @@ class _EditorScreenState extends State<EditorScreen> {
 
   /// Снимок текущего состояния редактора (партитура + курсор) для истории.
   EditorSnapshot _takeSnapshot() => EditorSnapshot(
-        score: _score!.copy(),
-        measure: _cursor.measure,
-        voice: _cursor.voice,
-        index: _cursor.index,
-      );
+    score: _score!.copy(),
+    measure: _cursor.measure,
+    voice: _cursor.voice,
+    index: _cursor.index,
+  );
 
   /// Откат / повтор. Восстанавливают партитуру и курсор как есть, без
   /// повторной нормализации — снимок уже валиден (флаг auto сохранён в копии).
@@ -229,7 +253,8 @@ class _EditorScreenState extends State<EditorScreen> {
   void _applySnapshot(EditorSnapshot snap) {
     setState(() {
       _score = snap.score;
-      _selAnchor = null; // позиции могли сместиться — якорь набора slur сбрасываем
+      _selAnchor =
+          null; // позиции могли сместиться — якорь набора slur сбрасываем
       _cursor
         ..measure = snap.measure
         ..voice = snap.voice
@@ -269,10 +294,11 @@ class _EditorScreenState extends State<EditorScreen> {
     // Авто-паузы добивки пересоздаются — на них курсор не закрепляем.
     final curList = _voiceOf(s, _cursor.measure, cv);
     final MusicNote? cursorNote =
-        (_cursor.index >= 0 && _cursor.index < curList.length &&
-                !curList[_cursor.index].auto)
-            ? curList[_cursor.index]
-            : null;
+        (_cursor.index >= 0 &&
+            _cursor.index < curList.length &&
+            !curList[_cursor.index].auto)
+        ? curList[_cursor.index]
+        : null;
 
     // упаковка каждого голоса в «корзины» (такты) по ёмкости КАЖДОГО такта.
     // Авто-паузы выбрасываем перед упаковкой — иначе добивка накапливалась бы.
@@ -291,20 +317,22 @@ class _EditorScreenState extends State<EditorScreen> {
     final count = maxBins > keepCount ? maxBins : keepCount;
     final measures = <Measure>[];
     for (var i = 0; i < count; i++) {
-      measures.add(Measure(
-        {
-          for (final v in s.instrument.voiceIds)
-            v: i < bins[v]!.length ? bins[v]![i] : <MusicNote>[],
-        },
-        // Смены тональности/размера и тактовая черта остаются на своём такте
-        // (позиционный якорь по индексу — переживают reflow).
-        keySignature: i < keysByIndex.length ? keysByIndex[i] : null,
-        timeSignature: i < tsByIndex.length ? tsByIndex[i] : null,
-        barline: i < barByIndex.length ? barByIndex[i] : null,
-        repeat: i < repeatByIndex.length ? repeatByIndex[i] : null,
-        volta: i < voltaByIndex.length ? voltaByIndex[i] : null,
-        navigation: i < navByIndex.length ? navByIndex[i] : null,
-      ));
+      measures.add(
+        Measure(
+          {
+            for (final v in s.instrument.voiceIds)
+              v: i < bins[v]!.length ? bins[v]![i] : <MusicNote>[],
+          },
+          // Смены тональности/размера и тактовая черта остаются на своём такте
+          // (позиционный якорь по индексу — переживают reflow).
+          keySignature: i < keysByIndex.length ? keysByIndex[i] : null,
+          timeSignature: i < tsByIndex.length ? tsByIndex[i] : null,
+          barline: i < barByIndex.length ? barByIndex[i] : null,
+          repeat: i < repeatByIndex.length ? repeatByIndex[i] : null,
+          volta: i < voltaByIndex.length ? voltaByIndex[i] : null,
+          navigation: i < navByIndex.length ? navByIndex[i] : null,
+        ),
+      );
     }
 
     // Целостность такта: каждый частично заполненный такт добиваем
@@ -344,8 +372,10 @@ class _EditorScreenState extends State<EditorScreen> {
       }
     }
     _cursor.measure = _cursor.measure.clamp(0, measures.length - 1);
-    _cursor.index =
-        _cursor.index.clamp(-1, _voiceOf(s, _cursor.measure, cv).length - 1);
+    _cursor.index = _cursor.index.clamp(
+      -1,
+      _voiceOf(s, _cursor.measure, cv).length - 1,
+    );
   }
 
   // --- операции редактирования ----------------------------------------
@@ -413,12 +443,14 @@ class _EditorScreenState extends State<EditorScreen> {
       // 3) иначе вставляем после курсора
       final pos = next.clamp(0, notes.length);
       notes.insert(
-          pos,
-          MusicNote.fromKeys(
-              keys: _sortedKeys(keys),
-              duration: _duration,
-              dots: _dots,
-              rest: rest));
+        pos,
+        MusicNote.fromKeys(
+          keys: _sortedKeys(keys),
+          duration: _duration,
+          dots: _dots,
+          rest: rest,
+        ),
+      );
       _cursor.index = pos;
     });
   }
@@ -557,7 +589,9 @@ class _EditorScreenState extends State<EditorScreen> {
   DynamicMark? get _cursorDynamic {
     if (!_canDynamic) return null;
     final beat = onsetBeats(_activeVoice, _cursor.index);
-    for (final d in _score!.measures[_cursor.measure].dynamicsOf(_cursor.voice)) {
+    for (final d in _score!.measures[_cursor.measure].dynamicsOf(
+      _cursor.voice,
+    )) {
       if ((d.beat - beat).abs() < 1e-6) return d.mark;
     }
     return null;
@@ -626,7 +660,8 @@ class _EditorScreenState extends State<EditorScreen> {
     for (var mi = 0; mi < _score!.measures.length; mi++) {
       for (final h in _score!.measures[mi].hairpins) {
         if (h.voice != v) continue;
-        if (_leq(mi, h.startBeat, cm, cb) && _leq(cm, cb, h.endMeasure, h.endBeat)) {
+        if (_leq(mi, h.startBeat, cm, cb) &&
+            _leq(cm, cb, h.endMeasure, h.endBeat)) {
           return h;
         }
       }
@@ -657,23 +692,33 @@ class _EditorScreenState extends State<EditorScreen> {
   /// голоса убираются (без наложений — как в проф. редакторах). Вилка кладётся на
   /// такт-НАЧАЛО ([m0]); конец — ([m1], доля ноты [i1]).
   void _applyHairpin(
-      HairpinType type, String voice, int m0, int i0, int m1, int i1) {
+    HairpinType type,
+    String voice,
+    int m0,
+    int i0,
+    int m1,
+    int i1,
+  ) {
     _commit(() {
       final startBeat = onsetBeats(_voiceOf(_score!, m0, voice), i0);
       final endBeat = onsetBeats(_voiceOf(_score!, m1, voice), i1);
       for (var mi = 0; mi < _score!.measures.length; mi++) {
-        _score!.measures[mi].hairpins.removeWhere((h) =>
-            h.voice == voice &&
-            _leq(mi, h.startBeat, m1, endBeat) &&
-            _leq(m0, startBeat, h.endMeasure, h.endBeat));
+        _score!.measures[mi].hairpins.removeWhere(
+          (h) =>
+              h.voice == voice &&
+              _leq(mi, h.startBeat, m1, endBeat) &&
+              _leq(m0, startBeat, h.endMeasure, h.endBeat),
+        );
       }
-      _score!.measures[m0].hairpins.add(Hairpin(
-        type: type,
-        voice: voice,
-        startBeat: startBeat,
-        endMeasure: m1,
-        endBeat: endBeat,
-      ));
+      _score!.measures[m0].hairpins.add(
+        Hairpin(
+          type: type,
+          voice: voice,
+          startBeat: startBeat,
+          endMeasure: m1,
+          endBeat: endBeat,
+        ),
+      );
     });
   }
 
@@ -691,7 +736,8 @@ class _EditorScreenState extends State<EditorScreen> {
   /// якорь; иначе ставит/снимает якорь на текущей ноте и возвращает null.
   ({String voice, int m0, int i0, int m1, int i1})? _consumeSelection() {
     final a = _selAnchor;
-    final sameNote = a != null &&
+    final sameNote =
+        a != null &&
         a.voice == _cursor.voice &&
         a.measure == _cursor.measure &&
         a.index == _cursor.index;
@@ -702,7 +748,8 @@ class _EditorScreenState extends State<EditorScreen> {
             : EditorCursor(
                 measure: _cursor.measure,
                 voice: _cursor.voice,
-                index: _cursor.index);
+                index: _cursor.index,
+              );
       });
       _render();
       return null;
@@ -717,7 +764,7 @@ class _EditorScreenState extends State<EditorScreen> {
       m0: lo.measure,
       i0: lo.index,
       m1: hi.measure,
-      i1: hi.index
+      i1: hi.index,
     );
   }
 
@@ -768,7 +815,14 @@ class _EditorScreenState extends State<EditorScreen> {
   /// Проставить соотношение [actual]:[normal] на нотах диапазона; tupletStart —
   /// на первой. Группа атомарна при reflow (см. packVoice/tupletChunks).
   void _applyTuplet(
-      String voice, int m0, int i0, int m1, int i1, int actual, int normal) {
+    String voice,
+    int m0,
+    int i0,
+    int m1,
+    int i1,
+    int actual,
+    int normal,
+  ) {
     _commit(() {
       final lo = _rank(m0, i0);
       final hi = _rank(m1, i1);
@@ -803,7 +857,9 @@ class _EditorScreenState extends State<EditorScreen> {
       s--;
     }
     var e = i;
-    while (e + 1 < notes.length && !notes[e + 1].tupletStart && same(notes[e + 1])) {
+    while (e + 1 < notes.length &&
+        !notes[e + 1].tupletStart &&
+        same(notes[e + 1])) {
       e++;
     }
     _commit(() {
@@ -834,15 +890,21 @@ class _EditorScreenState extends State<EditorScreen> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: Text('Tuplet (нестандартная ритмика)',
-                  style: Theme.of(ctx).textTheme.titleMedium),
+              child: Text(
+                'Tuplet (нестандартная ритмика)',
+                style: Theme.of(ctx).textTheme.titleMedium,
+              ),
             ),
             for (final p in presets)
               ListTile(
                 dense: true,
-                leading: Text('${p.$2}:${p.$3}',
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 16)),
+                leading: Text(
+                  '${p.$2}:${p.$3}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
                 title: Text(p.$1),
                 onTap: () => Navigator.pop(ctx, (p.$2, p.$3)),
               ),
@@ -878,10 +940,9 @@ class _EditorScreenState extends State<EditorScreen> {
                       isExpanded: true,
                       items: [
                         for (var i = 1; i <= 32; i++)
-                          DropdownMenuItem(value: i, child: Text('$i'))
+                          DropdownMenuItem(value: i, child: Text('$i')),
                       ],
-                      onChanged: (v) =>
-                          setLocal(() => beats = v ?? beats),
+                      onChanged: (v) => setLocal(() => beats = v ?? beats),
                     ),
                   ],
                 ),
@@ -915,8 +976,9 @@ class _EditorScreenState extends State<EditorScreen> {
           ),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Отмена')),
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Отмена'),
+            ),
             FilledButton(
               onPressed: () => Navigator.pop(ctx, '$beats/$beatValue'),
               child: const Text('OK'),
@@ -1002,7 +1064,8 @@ class _EditorScreenState extends State<EditorScreen> {
   void _toggleFollow() {
     setState(() => _follow = !_follow);
     _web?.evaluateJavascript(
-      source: 'window.ScoreFlow && window.ScoreFlow.setFollowPlayback($_follow);',
+      source:
+          'window.ScoreFlow && window.ScoreFlow.setFollowPlayback($_follow);',
     );
   }
 
@@ -1030,7 +1093,9 @@ class _EditorScreenState extends State<EditorScreen> {
         content: TextField(controller: ctrl, autofocus: true),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx), child: const Text('Отмена')),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Отмена'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, ctrl.text),
             child: const Text('OK'),
@@ -1147,8 +1212,9 @@ class _EditorScreenState extends State<EditorScreen> {
     final m = _cursor.measure;
     _commit(() {
       if (m == 0) {
-        _score!.timeSignature =
-            ts == null ? TimeSignature.common : TimeSignature.parse(ts);
+        _score!.timeSignature = ts == null
+            ? TimeSignature.common
+            : TimeSignature.parse(ts);
         _score!.measures[0].timeSignature = null;
       } else if (ts == null) {
         _score!.measures[m].timeSignature = null;
@@ -1178,8 +1244,9 @@ class _EditorScreenState extends State<EditorScreen> {
       // Храним ТОЛЬКО отклонение от позиционного дефолта: совпало с дефолтом
       // (или обычная одиночная) -> null. Тогда финальная черта конца партитуры
       // сама переедет при добавлении такта/reflow, а явные типы остаются.
-      _score!.measures[m].barline =
-          (chosen.isDefault || chosen == def) ? null : chosen;
+      _score!.measures[m].barline = (chosen.isDefault || chosen == def)
+          ? null
+          : chosen;
     });
   }
 
@@ -1203,8 +1270,7 @@ class _EditorScreenState extends State<EditorScreen> {
   void _setMeasureVolta(int? number) {
     final m = _cursor.measure;
     _commit(() {
-      _score!.measures[m].volta =
-          number == null ? null : Volta.ending(number);
+      _score!.measures[m].volta = number == null ? null : Volta.ending(number);
     });
   }
 
@@ -1288,8 +1354,9 @@ class _EditorScreenState extends State<EditorScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Отмена')),
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Отмена'),
+          ),
           FilledButton(
             onPressed: () {
               final v = int.tryParse(controller.text.trim());
@@ -1333,24 +1400,27 @@ class _EditorScreenState extends State<EditorScreen> {
 
           // Группа: заголовок + перенос-строка чипов.
           Widget group(String title, List<Widget> chips) => Padding(
-                padding: const EdgeInsets.fromLTRB(8, 10, 8, 0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title,
-                        style: Theme.of(ctx).textTheme.labelLarge?.copyWith(
-                            color:
-                                Theme.of(ctx).colorScheme.onSurfaceVariant)),
-                    const SizedBox(height: 6),
-                    Wrap(spacing: 6, runSpacing: 4, children: chips),
-                  ],
+            padding: const EdgeInsets.fromLTRB(8, 10, 8, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: Theme.of(ctx).textTheme.labelLarge?.copyWith(
+                    color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                  ),
                 ),
-              );
+                const SizedBox(height: 6),
+                Wrap(spacing: 6, runSpacing: 4, children: chips),
+              ],
+            ),
+          );
 
           // --- действующие значения по такту под курсором ---
           final effKey = score.effectiveKeySignatureAt(m);
-          final ownKey =
-              atStart ? score.keySignature : score.measures[m].keySignature;
+          final ownKey = atStart
+              ? score.keySignature
+              : score.measures[m].keySignature;
           final effTs = score.effectiveTimeSignatureAt(m).vex;
           final ownTs = atStart
               ? score.timeSignature.vex
@@ -1375,29 +1445,32 @@ class _EditorScreenState extends State<EditorScreen> {
                 children: [
                   Padding(
                     padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
-                    child: Text('Такт ${m + 1}',
-                        style: Theme.of(ctx).textTheme.titleMedium),
+                    child: Text(
+                      'Такт ${m + 1}',
+                      style: Theme.of(ctx).textTheme.titleMedium,
+                    ),
                   ),
 
                   // Тональность (фортепиано): такт 1 — начальная, дальше — смена
                   // по месту. «Без смены» доступно только не в первом такте.
                   if (isPiano)
                     group(
-                        atStart
-                            ? 'Тональность'
-                            : 'Тональность · действует $effKey',
-                        [
-                          if (!atStart)
-                            chip('Без смены', ownKey == null, () {
-                              _setMeasureKey(null);
-                              setSheet(() {});
-                            }),
-                          for (final k in _keySignatures)
-                            chip(k, atStart ? effKey == k : ownKey == k, () {
-                              _setMeasureKey(k);
-                              setSheet(() {});
-                            }),
-                        ]),
+                      atStart
+                          ? 'Тональность'
+                          : 'Тональность · действует $effKey',
+                      [
+                        if (!atStart)
+                          chip('Без смены', ownKey == null, () {
+                            _setMeasureKey(null);
+                            setSheet(() {});
+                          }),
+                        for (final k in _keySignatures)
+                          chip(k, atStart ? effKey == k : ownKey == k, () {
+                            _setMeasureKey(k);
+                            setSheet(() {});
+                          }),
+                      ],
+                    ),
 
                   // Размер: пресеты + «Другой…» (или текущий нестандартный).
                   group(atStart ? 'Размер' : 'Размер · действует $effTs', [
@@ -1413,7 +1486,8 @@ class _EditorScreenState extends State<EditorScreen> {
                       }),
                     chip(isCustomTs ? ownTs : 'Другой…', isCustomTs, () async {
                       final custom = await _pickCustomTimeSignature(
-                          score.effectiveTimeSignatureAt(m));
+                        score.effectiveTimeSignatureAt(m),
+                      );
                       if (custom != null) _setMeasureTimeSignature(custom);
                       setSheet(() {});
                     }),
@@ -1468,12 +1542,15 @@ class _EditorScreenState extends State<EditorScreen> {
                         _setTempoMark(p);
                         setSheet(() {});
                       }),
-                    chip(isCustomTempo ? '$curTempo' : 'Другое…', isCustomTempo,
-                        () async {
-                      final custom = await _pickCustomBpm(curTempo ?? 120);
-                      if (custom != null) _setTempoMark(custom);
-                      setSheet(() {});
-                    }),
+                    chip(
+                      isCustomTempo ? '$curTempo' : 'Другое…',
+                      isCustomTempo,
+                      () async {
+                        final custom = await _pickCustomBpm(curTempo ?? 120);
+                        if (custom != null) _setTempoMark(custom);
+                        setSheet(() {});
+                      },
+                    ),
                   ]),
 
                   const Divider(height: 20),
@@ -1482,15 +1559,19 @@ class _EditorScreenState extends State<EditorScreen> {
                   // чипов) и sustain (фортепиано).
                   Padding(
                     padding: const EdgeInsets.fromLTRB(8, 0, 8, 0),
-                    child: Text('Воспроизведение',
-                        style: Theme.of(ctx).textTheme.titleSmall),
+                    child: Text(
+                      'Воспроизведение',
+                      style: Theme.of(ctx).textTheme.titleSmall,
+                    ),
                   ),
                   ListTile(
                     contentPadding: const EdgeInsets.symmetric(horizontal: 8),
                     leading: const Icon(Icons.speed),
                     title: const Text('Начальный темп'),
-                    trailing: Text('${score.tempo} BPM',
-                        style: const TextStyle(fontWeight: FontWeight.bold)),
+                    trailing: Text(
+                      '${score.tempo} BPM',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
                   ),
                   Slider(
                     value: score.tempo.toDouble().clamp(40, 240),
@@ -1505,8 +1586,7 @@ class _EditorScreenState extends State<EditorScreen> {
                   ),
                   if (isPiano)
                     SwitchListTile(
-                      contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 8),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 8),
                       secondary: const Icon(Icons.piano),
                       title: const Text('Демпфер-педаль (sustain)'),
                       value: _sustain,
@@ -1573,8 +1653,8 @@ class _EditorScreenState extends State<EditorScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Flexible(
-                      child:
-                          Text(score.title, overflow: TextOverflow.ellipsis)),
+                    child: Text(score.title, overflow: TextOverflow.ellipsis),
+                  ),
                   const SizedBox(width: 6),
                   const Icon(Icons.edit, size: 16),
                 ],
@@ -1585,8 +1665,8 @@ class _EditorScreenState extends State<EditorScreen> {
               Text(
                 'Такт ${_cursor.measure + 1}/${score.measures.length}',
                 style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
               ),
             ],
           ),
@@ -1657,7 +1737,8 @@ class _EditorScreenState extends State<EditorScreen> {
                   _maybeLoadSamples();
                 },
                 onReceivedError: (c, request, error) => debugPrint(
-                    'WebView error: ${error.type} ${error.description} (${request.url})'),
+                  'WebView error: ${error.type} ${error.description} (${request.url})',
+                ),
                 onConsoleMessage: (c, msg) => debugPrint('JS: ${msg.message}'),
               ),
             ),
@@ -1667,40 +1748,41 @@ class _EditorScreenState extends State<EditorScreen> {
           // лучше). По остановке (_isPlaying=false) панель возвращается.
           if (!_isPlaying)
             _EditorPanel(
-            score: score,
-            cursor: _cursor,
-            duration: _duration,
-            dots: _dots,
-            stackMode: _stackMode,
-            tieOnCursor: _cursorOnNote && _activeVoice[_cursor.index].tieToNext,
-            selArmed: _selAnchor != null,
-            tupletOnCursor:
-                _cursorOnNote && _activeVoice[_cursor.index].tuplet != null,
-            canLiga: _cursorOnNote,
-            cursorAccidental: _cursorAccidental,
-            canDynamic: _canDynamic,
-            cursorDynamic: _cursorDynamic,
-            filledBeats: filledBeats,
-            totalBeats: totalBeats,
-            onDuration: (d) => setState(() => _duration = d),
-            onDots: (v) => setState(() => _dots = v),
-            onToggleStack: () => setState(() => _stackMode = !_stackMode),
-            onToggleTie: _toggleTie,
-            onToggleSlur: _toggleSlur,
-            onTuplet: _onTuplet,
-            hairpinOnCursor: _hairpinOnCursor,
-            onHairpinCresc: () => _onHairpin(HairpinType.crescendo),
-            onHairpinDim: () => _onHairpin(HairpinType.diminuendo),
-            onAccidental: _setAccidental,
-            onDynamic: _setDynamic,
-            cursorArticulations: _cursorArticulations,
-            onArticulation: _toggleArticulation,
-            onInsert: (keys) => _insertNote(keys: keys),
-            onRest: () => _insertNote(keys: const [], rest: true),
-            onDelete: _deleteAtCursor,
-            onMoveNote: _moveNote,
-            onSwitchVoice: _switchVoice,
-          ),
+              score: score,
+              cursor: _cursor,
+              duration: _duration,
+              dots: _dots,
+              stackMode: _stackMode,
+              tieOnCursor:
+                  _cursorOnNote && _activeVoice[_cursor.index].tieToNext,
+              selArmed: _selAnchor != null,
+              tupletOnCursor:
+                  _cursorOnNote && _activeVoice[_cursor.index].tuplet != null,
+              canLiga: _cursorOnNote,
+              cursorAccidental: _cursorAccidental,
+              canDynamic: _canDynamic,
+              cursorDynamic: _cursorDynamic,
+              filledBeats: filledBeats,
+              totalBeats: totalBeats,
+              onDuration: (d) => setState(() => _duration = d),
+              onDots: (v) => setState(() => _dots = v),
+              onToggleStack: () => setState(() => _stackMode = !_stackMode),
+              onToggleTie: _toggleTie,
+              onToggleSlur: _toggleSlur,
+              onTuplet: _onTuplet,
+              hairpinOnCursor: _hairpinOnCursor,
+              onHairpinCresc: () => _onHairpin(HairpinType.crescendo),
+              onHairpinDim: () => _onHairpin(HairpinType.diminuendo),
+              onAccidental: _setAccidental,
+              onDynamic: _setDynamic,
+              cursorArticulations: _cursorArticulations,
+              onArticulation: _toggleArticulation,
+              onInsert: (keys) => _insertNote(keys: keys),
+              onRest: () => _insertNote(keys: const [], rest: true),
+              onDelete: _deleteAtCursor,
+              onMoveNote: _moveNote,
+              onSwitchVoice: _switchVoice,
+            ),
         ],
       ),
       bottomNavigationBar: _PlaybackBar(
@@ -1865,24 +1947,30 @@ class _EditorPanelState extends State<_EditorPanel> {
     return Row(
       children: [
         for (final e in durations.entries)
-          _durSeg(context,
-              label: e.value,
-              selected: widget.duration == e.key,
-              onTap: () => widget.onDuration(e.key)),
-        _durSeg(context,
-            label: '♩.',
-            selected: widget.dots > 0,
-            tooltip: 'Нота с точкой',
-            onTap: () => widget.onDots(widget.dots > 0 ? 0 : 1)),
+          _durSeg(
+            context,
+            label: e.value,
+            selected: widget.duration == e.key,
+            onTap: () => widget.onDuration(e.key),
+          ),
+        _durSeg(
+          context,
+          label: '♩.',
+          selected: widget.dots > 0,
+          tooltip: 'Нота с точкой',
+          onTap: () => widget.onDots(widget.dots > 0 ? 0 : 1),
+        ),
       ],
     );
   }
 
-  Widget _durSeg(BuildContext context,
-      {required String label,
-      required bool selected,
-      required VoidCallback onTap,
-      String? tooltip}) {
+  Widget _durSeg(
+    BuildContext context, {
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+    String? tooltip,
+  }) {
     final scheme = Theme.of(context).colorScheme;
     Widget seg = Padding(
       padding: const EdgeInsets.symmetric(horizontal: 2),
@@ -1899,12 +1987,15 @@ class _EditorPanelState extends State<_EditorPanel> {
             child: Center(
               child: FittedBox(
                 fit: BoxFit.scaleDown,
-                child: Text(label,
-                    style: TextStyle(
-                        fontSize: 22,
-                        color: selected
-                            ? scheme.onSecondaryContainer
-                            : scheme.onSurfaceVariant)),
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 22,
+                    color: selected
+                        ? scheme.onSecondaryContainer
+                        : scheme.onSurfaceVariant,
+                  ),
+                ),
               ),
             ),
           ),
@@ -1987,21 +2078,25 @@ class _EditorPanelState extends State<_EditorPanel> {
   }
 
   Widget _modeGlyph(_CtxMode m) => switch (m) {
-        _CtxMode.edit => const Icon(Icons.edit_note, size: 20),
-        _CtxMode.pitch => const Text('♯', style: TextStyle(fontSize: 17)),
-        _CtxMode.dyn => const Text('ƒ',
-            style: TextStyle(fontSize: 17, fontStyle: FontStyle.italic)),
-        _CtxMode.art => const Text('>',
-            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
-      };
+    _CtxMode.edit => const Icon(Icons.edit_note, size: 20),
+    _CtxMode.pitch => const Text('♯', style: TextStyle(fontSize: 17)),
+    _CtxMode.dyn => const Text(
+      'ƒ',
+      style: TextStyle(fontSize: 17, fontStyle: FontStyle.italic),
+    ),
+    _CtxMode.art => const Text(
+      '>',
+      style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+    ),
+  };
 
   // Инструменты активного режима (без Паузы/«Стереть» — те закреплены справа).
   List<Widget> _modeContent(BuildContext context) => switch (_effMode) {
-        _CtxMode.edit => _editItems(context),
-        _CtxMode.pitch => _accidentalItems(context),
-        _CtxMode.dyn => _dynamicItems(context),
-        _CtxMode.art => _articulationItems(context),
-      };
+    _CtxMode.edit => _editItems(context),
+    _CtxMode.pitch => _accidentalItems(context),
+    _CtxMode.dyn => _dynamicItems(context),
+    _CtxMode.art => _articulationItems(context),
+  };
 
   // Режим «Правка»: голос (фортепиано), аккорд-режим, шаг курсора ◀▶, лиги,
   // tuplet, вилки. На границе такта ◀▶ сам переходит в соседний такт.
@@ -2047,8 +2142,9 @@ class _EditorPanelState extends State<_EditorPanel> {
         selectedIcon: const Icon(Icons.layers),
         style: IconButton.styleFrom(
           backgroundColor: widget.stackMode ? scheme.secondaryContainer : null,
-          foregroundColor:
-              widget.stackMode ? scheme.onSecondaryContainer : null,
+          foregroundColor: widget.stackMode
+              ? scheme.onSecondaryContainer
+              : null,
         ),
         onPressed: widget.onToggleStack,
       ),
@@ -2061,10 +2157,12 @@ class _EditorPanelState extends State<_EditorPanel> {
         constraints: tight,
         icon: const Icon(Icons.link),
         style: IconButton.styleFrom(
-          backgroundColor:
-              widget.tieOnCursor ? scheme.secondaryContainer : null,
-          foregroundColor:
-              widget.tieOnCursor ? scheme.onSecondaryContainer : null,
+          backgroundColor: widget.tieOnCursor
+              ? scheme.secondaryContainer
+              : null,
+          foregroundColor: widget.tieOnCursor
+              ? scheme.onSecondaryContainer
+              : null,
         ),
         onPressed: widget.canLiga ? widget.onToggleTie : null,
       ),
@@ -2080,8 +2178,7 @@ class _EditorPanelState extends State<_EditorPanel> {
         icon: const Icon(Icons.gesture),
         style: IconButton.styleFrom(
           backgroundColor: widget.selArmed ? scheme.tertiaryContainer : null,
-          foregroundColor:
-              widget.selArmed ? scheme.onTertiaryContainer : null,
+          foregroundColor: widget.selArmed ? scheme.onTertiaryContainer : null,
         ),
         onPressed: widget.canLiga ? widget.onToggleSlur : null,
       ),
@@ -2090,21 +2187,24 @@ class _EditorPanelState extends State<_EditorPanel> {
         tooltip: widget.tupletOnCursor
             ? 'Убрать tuplet'
             : (widget.selArmed
-                ? 'Tuplet: выберите второй конец'
-                : 'Tuplet (триоль/квинтоль/…)'),
+                  ? 'Tuplet: выберите второй конец'
+                  : 'Tuplet (триоль/квинтоль/…)'),
         isSelected: widget.tupletOnCursor,
         visualDensity: VisualDensity.compact,
         padding: EdgeInsets.zero,
         constraints: tight,
         icon: const Icon(Icons.data_array),
         style: IconButton.styleFrom(
-          backgroundColor:
-              widget.tupletOnCursor ? scheme.secondaryContainer : null,
-          foregroundColor:
-              widget.tupletOnCursor ? scheme.onSecondaryContainer : null,
+          backgroundColor: widget.tupletOnCursor
+              ? scheme.secondaryContainer
+              : null,
+          foregroundColor: widget.tupletOnCursor
+              ? scheme.onSecondaryContainer
+              : null,
         ),
-        onPressed:
-            (widget.canLiga || widget.tupletOnCursor) ? widget.onTuplet : null,
+        onPressed: (widget.canLiga || widget.tupletOnCursor)
+            ? widget.onTuplet
+            : null,
       ),
       // Crescendo (<) — вилка нарастания (в вилке — снимает; иначе якорь ->
       // второй конец, как slur). Подсвечена, когда курсор внутри вилки.
@@ -2112,19 +2212,23 @@ class _EditorPanelState extends State<_EditorPanel> {
         tooltip: widget.hairpinOnCursor
             ? 'Убрать вилку'
             : (widget.selArmed
-                ? 'Крещендо: выберите второй конец'
-                : 'Крещендо (<)'),
+                  ? 'Крещендо: выберите второй конец'
+                  : 'Крещендо (<)'),
         isSelected: widget.hairpinOnCursor,
         visualDensity: VisualDensity.compact,
         padding: EdgeInsets.zero,
         constraints: tight,
-        icon: const Text('<',
-            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
+        icon: const Text(
+          '<',
+          style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
+        ),
         style: IconButton.styleFrom(
-          backgroundColor:
-              widget.hairpinOnCursor ? scheme.secondaryContainer : null,
-          foregroundColor:
-              widget.hairpinOnCursor ? scheme.onSecondaryContainer : null,
+          backgroundColor: widget.hairpinOnCursor
+              ? scheme.secondaryContainer
+              : null,
+          foregroundColor: widget.hairpinOnCursor
+              ? scheme.onSecondaryContainer
+              : null,
         ),
         onPressed: (widget.canLiga || widget.hairpinOnCursor)
             ? widget.onHairpinCresc
@@ -2135,19 +2239,23 @@ class _EditorPanelState extends State<_EditorPanel> {
         tooltip: widget.hairpinOnCursor
             ? 'Убрать вилку'
             : (widget.selArmed
-                ? 'Диминуэндо: выберите второй конец'
-                : 'Диминуэндо (>)'),
+                  ? 'Диминуэндо: выберите второй конец'
+                  : 'Диминуэндо (>)'),
         isSelected: widget.hairpinOnCursor,
         visualDensity: VisualDensity.compact,
         padding: EdgeInsets.zero,
         constraints: tight,
-        icon: const Text('>',
-            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600)),
+        icon: const Text(
+          '>',
+          style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
+        ),
         style: IconButton.styleFrom(
-          backgroundColor:
-              widget.hairpinOnCursor ? scheme.secondaryContainer : null,
-          foregroundColor:
-              widget.hairpinOnCursor ? scheme.onSecondaryContainer : null,
+          backgroundColor: widget.hairpinOnCursor
+              ? scheme.secondaryContainer
+              : null,
+          foregroundColor: widget.hairpinOnCursor
+              ? scheme.onSecondaryContainer
+              : null,
         ),
         onPressed: (widget.canLiga || widget.hairpinOnCursor)
             ? widget.onHairpinDim
@@ -2158,13 +2266,13 @@ class _EditorPanelState extends State<_EditorPanel> {
 
   // Пауза — закреплена справа (нужна в любом режиме при вводе ритма).
   Widget _restButton(BuildContext context) => IconButton.filledTonal(
-        tooltip: 'Пауза',
-        visualDensity: VisualDensity.compact,
-        padding: EdgeInsets.zero,
-        constraints: const BoxConstraints(minWidth: 34, minHeight: 38),
-        icon: const Icon(Icons.music_off),
-        onPressed: widget.onRest,
-      );
+    tooltip: 'Пауза',
+    visualDensity: VisualDensity.compact,
+    padding: EdgeInsets.zero,
+    constraints: const BoxConstraints(minWidth: 34, minHeight: 38),
+    icon: const Icon(Icons.music_off),
+    onPressed: widget.onRest,
+  );
 
   // «Стереть» — закреплена справа, окрашена в error-контейнер (частое действие
   // исправления; отделена от режимов, чтобы всегда быть под рукой).
@@ -2211,11 +2319,13 @@ class _EditorPanelState extends State<_EditorPanel> {
                   padding: const EdgeInsets.symmetric(horizontal: 10),
                   minimumSize: const Size(34, 38),
                   backgroundColor: active ? scheme.secondaryContainer : null,
-                  foregroundColor:
-                      active ? scheme.onSecondaryContainer : scheme.onSurface,
+                  foregroundColor: active
+                      ? scheme.onSecondaryContainer
+                      : scheme.onSurface,
                 ),
-                onPressed:
-                    widget.canLiga ? () => widget.onAccidental(acc) : null,
+                onPressed: widget.canLiga
+                    ? () => widget.onAccidental(acc)
+                    : null,
                 child: Tooltip(
                   message: tip,
                   child: Text(glyph, style: const TextStyle(fontSize: 18)),
@@ -2258,11 +2368,13 @@ class _EditorPanelState extends State<_EditorPanel> {
                   padding: const EdgeInsets.symmetric(horizontal: 10),
                   minimumSize: const Size(34, 38),
                   backgroundColor: active ? scheme.secondaryContainer : null,
-                  foregroundColor:
-                      active ? scheme.onSecondaryContainer : scheme.onSurface,
+                  foregroundColor: active
+                      ? scheme.onSecondaryContainer
+                      : scheme.onSurface,
                 ),
-                onPressed:
-                    widget.canLiga ? () => widget.onArticulation(art) : null,
+                onPressed: widget.canLiga
+                    ? () => widget.onArticulation(art)
+                    : null,
                 child: Tooltip(
                   message: tip,
                   child: Text(glyph, style: const TextStyle(fontSize: 18)),
@@ -2293,16 +2405,21 @@ class _EditorPanelState extends State<_EditorPanel> {
                   padding: const EdgeInsets.symmetric(horizontal: 10),
                   minimumSize: const Size(38, 38),
                   backgroundColor: active ? scheme.secondaryContainer : null,
-                  foregroundColor:
-                      active ? scheme.onSecondaryContainer : scheme.onSurface,
+                  foregroundColor: active
+                      ? scheme.onSecondaryContainer
+                      : scheme.onSurface,
                 ),
-                onPressed:
-                    widget.canDynamic ? () => widget.onDynamic(mark) : null,
-                child: Text(mark.label,
-                    style: const TextStyle(
-                        fontSize: 16,
-                        fontStyle: FontStyle.italic,
-                        fontWeight: FontWeight.bold)),
+                onPressed: widget.canDynamic
+                    ? () => widget.onDynamic(mark)
+                    : null,
+                child: Text(
+                  mark.label,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontStyle: FontStyle.italic,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ),
             );
           }(),
@@ -2331,7 +2448,13 @@ class _PianoKeyboardState extends State<PianoKeyboard> {
   static const List<int> _octaves = [2, 3, 4, 5, 6];
   static const List<String> _white = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
   // Чёрная клавиша после белой с индексом i (диезы есть у C,D,F,G,A).
-  static const Map<int, String> _black = {0: 'C', 1: 'D', 3: 'F', 4: 'G', 5: 'A'};
+  static const Map<int, String> _black = {
+    0: 'C',
+    1: 'D',
+    3: 'F',
+    4: 'G',
+    5: 'A',
+  };
 
   static const double _whiteW = 34;
   static const double _blackW = 22;
@@ -2356,11 +2479,16 @@ class _PianoKeyboardState extends State<PianoKeyboard> {
     final idx = _octaves.indexOf(widget.focusOctave);
     if (idx < 0) return;
     // центрируем нужную октаву в видимой области
-    final target = (idx * _octaveW - _octaveW / 2)
-        .clamp(0.0, _scroll.position.maxScrollExtent);
+    final target = (idx * _octaveW - _octaveW / 2).clamp(
+      0.0,
+      _scroll.position.maxScrollExtent,
+    );
     if (animate) {
-      _scroll.animateTo(target,
-          duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+      _scroll.animateTo(
+        target,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
     } else {
       _scroll.jumpTo(target);
     }
@@ -2452,8 +2580,7 @@ class _PianoKeyboardState extends State<PianoKeyboard> {
               alignment: Alignment.bottomCenter,
               child: Padding(
                 padding: const EdgeInsets.only(bottom: 4),
-                child: Text(label,
-                    style: TextStyle(fontSize: 9, color: fg)),
+                child: Text(label, style: TextStyle(fontSize: 9, color: fg)),
               ),
             ),
           ),
@@ -2486,9 +2613,11 @@ class _DrumPad extends StatelessWidget {
                     padding: const EdgeInsets.symmetric(horizontal: 4),
                   ),
                   onPressed: () => onInsert(e.value),
-                  child: Text(e.key,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 12)),
+                  child: Text(
+                    e.key,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 12),
+                  ),
                 ),
               ),
             ),
