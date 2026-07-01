@@ -73,6 +73,7 @@ Unlike traditional desktop-first notation software, ScoreFlow is designed with a
 | Ties & slurs           |    ✅   |
 | Accidentals            |    ✅   |
 | Dynamics               |    ✅   |
+| Hairpins (cresc/dim)   |    ✅   |
 | Key signatures         |    ✅   |
 | Mid-score key changes  |    ✅   |
 | Courtesy naturals      |    ✅   |

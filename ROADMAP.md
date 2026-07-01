@@ -4,10 +4,10 @@
 > against the actual codebase, not aspirations.
 >
 > Last reviewed: **2026-07-01** · Flutter 3.44.3 · Material 3 · VexFlow 4.2.2 · ES Modules.
-> Latest: professional Volta System (first & second endings — first-class
-> range-anchored notation object, shared screen/PDF bracket engraving, repeat +
-> volta expansion in one compiler authority, reflow-safe; completes the
-> professional repeat architecture).
+> Latest: professional Hairpin System (crescendo / diminuendo — first-class
+> range-anchored notation object extending the Dynamics architecture; velocity
+> interpolation resolved once inside the compiler's `velocityAt`, shared
+> screen/PDF wedge engraving, time-anchored reflow; scheduler stays unaware).
 
 ---
 
@@ -193,6 +193,22 @@ Secondary goals:
   * Per-voice timelines
   * Reflow preservation
   * Collision avoidance
+* [x] Professional Hairpin System (crescendo / diminuendo)
+
+  * First-class range hairpin notation object (per-measure `_hair`, voice + time-anchored)
+  * Crescendo (`<`) / Diminuendo (`>`)
+  * Extends the Dynamics architecture — not a separate playback system
+  * Compiler-resolved velocity interpolation inside `velocityAt` (resolved once)
+  * Ramps between the surrounding dynamic marks; default step when no target
+  * Interpolated end velocity holds until the next dynamic
+  * Professional wedge engraving on the shared dynamics baseline
+  * System-break aware (continuous wedge across line breaks)
+  * Shared screen/PDF hairpin rendering (visually identical)
+  * Scheduler remains unaware of dynamics and hairpins
+  * Editor tool (select start → end; crescendo / diminuendo / remove)
+  * Undo / Redo, serialization, legacy loading, autosave
+  * Time-anchored reflow (re-anchored by absolute beat, like dynamics)
+  * Future-ready for niente, custom wedges, expression, playback curves
 
 ---
 
@@ -213,6 +229,7 @@ Secondary goals:
 * [x] Compiler-resolved dynamics
 * [x] Compiler-resolved repeats
 * [x] Compiler-resolved voltas
+* [x] Compiler-resolved hairpins (velocity interpolation)
 * [x] Shared perceptual velocity curve
 * [x] Unified velocity → gain pipeline
 
@@ -240,6 +257,7 @@ Secondary goals:
 * [x] Dynamics editor
 * [x] Repeat editor
 * [x] Volta editor
+* [x] Hairpin editor
 * [x] Score library
 
   * Create
@@ -306,14 +324,6 @@ Secondary goals:
 * [ ] Staccatissimo
 * [ ] Fermata
 * [ ] Playback support
-
----
-
-### Hairpins
-
-* [ ] Crescendo
-* [ ] Diminuendo
-* [ ] Playback interpolation
 
 ---
 
