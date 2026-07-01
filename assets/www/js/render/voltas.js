@@ -16,19 +16,23 @@
 // номера (профессиональная конвенция).
 
 const COLOR = '#000000';
-const HOOK = 12;        // длина вертикального крюка вниз
+const HOOK = 11;        // длина вертикального крюка вниз (к стану)
 const LINE_W = 1.4;     // толщина скобки
-const ABOVE_GAP = 10;   // отступ скобки над верхней линейкой стана
+const STAFF_CLEAR = 9;  // зазор между НИЗОМ крюка и верхней линейкой стана —
+                        // скобка целиком НАД станом, крюки в него не входят
 const NUM_DX = 5;       // сдвиг номера вправо от левого края
-const NUM_GAP = 2;      // зазор между скобкой и версхом цифры
 const FONT = 12;        // кегль номера концовки
 
-// Вертикальное место (px), которое вольты резервируют НАД станом (крюк + номер +
-// отступ). Экран и печать раздвигают систему ровно на эту величину, когда в
-// партитуре есть вольты, чтобы скобка не налезала на верх страницы/предыдущую
-// систему. 0 — вольт нет.
+// Полная высота скобки над верхней линейкой стана: горизонтальная линия на
+// (STAFF_CLEAR + HOOK) выше линейки, крюки идут вниз, но останавливаются за
+// STAFF_CLEAR до стана. Единый источник и для headroom, и для позиции линии.
+const BRACKET_ABOVE = STAFF_CLEAR + HOOK;
+
+// Вертикальное место (px), которое вольты резервируют НАД станом. Экран и печать
+// раздвигают систему ровно на эту величину, когда в партитуре есть вольты, чтобы
+// скобка не налезала на верх страницы/предыдущую систему. 0 — вольт нет.
 export function voltaHeadroom(voltas) {
-    return (voltas && voltas.length) ? (ABOVE_GAP + HOOK + FONT + 4) : 0;
+    return (voltas && voltas.length) ? (BRACKET_ABOVE + 6) : 0;
 }
 
 // Нарисовать один сегмент вольты. [x0,x1] — левый/правый край скобки, [y] —
@@ -50,7 +54,8 @@ export function drawVoltaSegment(ctx, x0, x1, y, label, leftHook, rightHook) {
         ctx.save();
         ctx.setFont('serif', FONT, '');
         if (ctx.setFillStyle) ctx.setFillStyle(COLOR);
-        ctx.fillText(label, x0 + NUM_DX, y + FONT + NUM_GAP);
+        // Номер — под линией, в «коробке» между линией и низом крюка (над станом).
+        ctx.fillText(label, x0 + NUM_DX, y + FONT);
         ctx.restore();
     }
 }
@@ -59,10 +64,11 @@ export function drawVoltaSegment(ctx, x0, x1, y, label, leftHook, rightHook) {
 // [spans] — из domain/voltas.effectiveVoltas (весь список; сегмент рисуется
 // только если вольта пересекается с полосой). [boxOf] — функция mi -> {x, w}
 // (левый край и ширина такта) ЛИБО null, если такта нет в этой полосе. [topLineY]
-// — Y верхней линейки верхнего стана полосы. Скобка ложится на topLineY-ABOVE_GAP.
+// — Y верхней линейки верхнего стана полосы. Линия скобки — на BRACKET_ABOVE выше
+// линейки, крюки идут вниз к стану, но не входят в него (зазор STAFF_CLEAR).
 export function drawVoltasInBand(ctx, spans, boxOf, topLineY) {
     if (!spans || !spans.length || topLineY == null) return;
-    const y = topLineY - ABOVE_GAP;
+    const y = topLineY - BRACKET_ABOVE;
     for (let s = 0; s < spans.length; s++) {
         const sp = spans[s];
         let first = -1, last = -1;
