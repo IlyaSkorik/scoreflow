@@ -217,10 +217,9 @@ assets/www/
 └── drums/
 
 lib/
+├── data/
 ├── models/
-├── repository/
 ├── screens/
-├── services/
 └── widgets/
 ```
 
@@ -265,6 +264,13 @@ flutter analyze
 flutter test
 ```
 
+The JavaScript notation/playback engine has its own standalone Node test suite
+(each file exits non-zero on failure):
+
+```bash
+for f in test/js/*.test.mjs; do node "$f"; done
+```
+
 ---
 
 # 🔊 Audio Samples
@@ -286,12 +292,10 @@ If audio samples are unavailable, the playback engine automatically falls back t
 
 Current priorities include:
 
-* Crescendo / Diminuendo
 * MusicXML Import
 * MIDI Export
 * Copy & Paste
 * Multi-selection
-* Articulations
 * Cloud Synchronization
 
 For the complete roadmap, see **ROADMAP.md**.

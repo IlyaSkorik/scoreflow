@@ -215,10 +215,9 @@ assets/www/
 └── drums/
 
 lib/
+├── data/
 ├── models/
-├── repository/
 ├── screens/
-├── services/
 └── widgets/
 ```
 
@@ -263,6 +262,13 @@ flutter analyze
 flutter test
 ```
 
+У JavaScript-движка нотации/плейбека — собственный автономный набор тестов на
+Node (каждый файл завершается ненулевым кодом при ошибке):
+
+```bash
+for f in test/js/*.test.mjs; do node "$f"; done
+```
+
 ---
 
 # 🔊 Аудиосемплы
@@ -284,12 +290,10 @@ node tools/fetch_drums.mjs
 
 Ближайшие задачи:
 
-* Crescendo / Diminuendo
 * Импорт MusicXML
 * Экспорт MIDI
 * Копирование и вставка
 * Множественное выделение
-* Артикуляции
 * Облачная синхронизация
 
 Полный список задач находится в **ROADMAP.md**.

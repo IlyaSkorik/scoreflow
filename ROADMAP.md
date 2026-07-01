@@ -52,7 +52,7 @@ Secondary goals:
 * [x] Offline-first local storage
 * [x] Flutter + Material 3
 * [x] VexFlow WebView engine
-* [x] Modular ES-module architecture (18 JS modules)
+* [x] Modular ES-module architecture (35 JS modules)
 * [x] Local HTTP asset server
 * [x] PDF export
 * [x] Professional A4 pagination
@@ -329,7 +329,6 @@ Secondary goals:
 * [x] JavaScript engine tests
 * [x] Android Debug build
 * [x] Android Release build
-* [x] GitHub Release workflow
 
 ---
 

@@ -80,10 +80,17 @@ flutter analyze
 
 All existing tests should pass.
 
-Run:
+Run the Dart suite:
 
 ```bash
 flutter test
+```
+
+The JavaScript notation/playback engine has its own standalone Node tests (each
+file exits non-zero on failure):
+
+```bash
+for f in test/js/*.test.mjs; do node "$f"; done
 ```
 
 If your change introduces new functionality, please consider adding tests where appropriate.
