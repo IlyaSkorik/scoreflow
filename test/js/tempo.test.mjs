@@ -2,11 +2,17 @@
 // объекты, которые компилятор превращает в АБСОЛЮТНОЕ время (domain/tempo +
 // compiler). Playback-время резолвится ОДИН раз; scheduler читает готовые
 // startSec/durSec. Рендер метки — общий примитив (render/tempo).
+import { createRequire } from 'module';
 import {
     tempoSpq, buildTempoMap, readTempoMarks, beatUnitQuarters,
 } from '../../assets/www/js/domain/tempo.js';
 import { compilePlayback } from '../../assets/www/js/playback/compiler.js';
-import { drawTempoMark, drawTempos, tempoHeadroom } from '../../assets/www/js/render/tempo.js';
+import {
+    drawTempoMark, drawTempos, tempoHeadroom, tempoMarkHeadroom, tempoUnitDuration,
+} from '../../assets/www/js/render/tempo.js';
+
+const require = createRequire(import.meta.url);
+const RealVF = require('../../assets/www/js/vexflow.js').Flow;
 
 let failed = 0;
 function eq(name, got, want) {
@@ -128,15 +134,39 @@ console.log('scheduler-compat — every event carries absolute time:');
 }
 
 // --- rendering (shared screen & PDF) -----------------------------------
+// Записывающий контекст: полный набор методов StaveNote.draw() + журнал.
 function fakeCtx() {
-    const rec = { glyphs: [], texts: [], lines: [] };
+    const rec = {
+        glyphs: [], texts: [], lines: [], groups: [], beziers: 0,
+        minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity,
+    };
     let cur = null;
+    const track = (pts) => {
+        for (let i = 0; i + 1 < pts.length; i += 2) {
+            rec.minX = Math.min(rec.minX, pts[i]); rec.maxX = Math.max(rec.maxX, pts[i]);
+            rec.minY = Math.min(rec.minY, pts[i + 1]); rec.maxY = Math.max(rec.maxY, pts[i + 1]);
+        }
+    };
     return {
         rec,
         save() {}, restore() {}, setLineWidth() {}, setStrokeStyle() {},
         setFillStyle() {}, setLineDash() {}, setFont() {}, beginPath() {}, stroke() {},
-        moveTo(x, y) { cur = { x, y }; },
-        lineTo(x, y) { rec.lines.push({ x0: cur.x, y0: cur.y, x1: x, y1: y }); },
+        closePath() {}, fill() {}, rect() {}, fillRect() {},
+        arc() {},
+        openGroup(cls) {
+            const g = { attrs: {}, setAttribute(k, v) { g.attrs[k] = v; } };
+            rec.groups.push({ cls, el: g });
+            return g;
+        },
+        closeGroup() {},
+        measureText() { return { width: 10 }; },
+        moveTo(x, y) { cur = { x, y }; track([x, y]); },
+        lineTo(x, y) {
+            rec.lines.push({ x0: cur ? cur.x : x, y0: cur ? cur.y : y, x1: x, y1: y });
+            cur = { x, y }; track([x, y]);
+        },
+        bezierCurveTo(a, b, c, d, e, f) { rec.beziers++; cur = { x: e, y: f }; track([a, b, c, d, e, f]); },
+        quadraticCurveTo(a, b, c, d) { rec.beziers++; cur = { x: c, y: d }; track([a, b, c, d]); },
         fillText(t, x, y) { rec.texts.push({ t, x, y }); },
     };
 }
@@ -150,19 +180,64 @@ function mockGlyphVF() {
     return { Glyph };
 }
 
-console.log('render — tempo mark = notehead + stem + "= bpm":');
+console.log('render — REAL VexFlow engraving (StaveNote, vector group):');
 {
     const ctx = fakeCtx();
+    drawTempoMark(RealVF, ctx, 100, 50, { duration: 'q', dots: 0, bpm: 120 });
+    const grp = ctx.rec.groups.filter((g) => g.cls === 'scoreflow-tempo-note');
+    eq('engraved inside dedicated SVG group', grp.length, 1);
+    eq('group scaled as vector transform',
+        /translate\(.+\) scale\(0\.8\)/.test(grp[0].el.attrs.transform || ''), true);
+    eq('genuine glyph outlines (bezier paths), not a font symbol',
+        ctx.rec.beziers > 0, true);
+    // Укороченный издательский штиль: в нотных координатах (до transform)
+    // головка на 60, верх штиля на 38 (длина 22 вместо штатных 35).
+    const stem = ctx.rec.lines.find((l) =>
+        Math.abs(l.x0 - l.x1) < 0.01 && Math.abs(l.y0 - l.y1) > 5);
+    eq('stem drawn, publisher-short (top at 38 in note space)',
+        stem && Math.round(stem.y1), 38);
+    eq('BPM text "= 120" on the shared baseline y',
+        ctx.rec.texts.map((t) => [t.t, t.y]), [['= 120', 50]]);
+    // Правый край четвертной в нотных координатах ~28.9 при головке с 17:
+    // текст = x + SCALE*(28.9-17) + EQ_GAP(5) ≈ x + 14.5.
+    near('text starts after the note with comfortable gap',
+        ctx.rec.texts[0].x, 114.5, 1.5);
+}
+{
+    // Любая длительность: восьмая гравируется с настоящим флажком (шире и выше).
+    const q = fakeCtx(), e8 = fakeCtx(), w = fakeCtx();
+    drawTempoMark(RealVF, q, 0, 0, { duration: 'q', bpm: 60 });
+    drawTempoMark(RealVF, e8, 0, 0, { duration: '8', bpm: 60 });
+    drawTempoMark(RealVF, w, 0, 0, { duration: 'w', bpm: 60 });
+    eq('8th wider than quarter (real flag)', e8.rec.maxX > q.rec.maxX + 5, true);
+    eq('whole has no stem (short)', w.rec.maxY - w.rec.minY < 15, true);
+    // Кеш: повторная отрисовка того же объекта идемпотентна.
+    const q2 = fakeCtx();
+    drawTempoMark(RealVF, q2, 0, 0, { duration: 'q', bpm: 60 });
+    eq('cached note redraw is identical',
+        [q2.rec.minX, q2.rec.minY, q2.rec.maxX, q2.rec.maxY].map(Math.round),
+        [q.rec.minX, q.rec.minY, q.rec.maxX, q.rec.maxY].map(Math.round));
+    // Пунктирная — рисуется без ошибок (точка — настоящий модификатор).
+    const qd = fakeCtx();
+    drawTempoMark(RealVF, qd, 0, 0, { duration: 'q', dots: 1, bpm: 60 });
+    eq('dotted quarter engraves', qd.rec.groups.length > 0, true);
+}
+
+console.log('render — fallback without StaveNote/SVG groups (glyph + stem):');
+{
+    const ctx = fakeCtx();
+    delete ctx.openGroup; // не-SVG контекст -> фолбэк
     drawTempoMark(mockGlyphVF(), ctx, 100, 50, 120);
     eq('notehead glyph drawn', ctx.rec.glyphs.map((g) => g.code), ['noteheadBlack']);
     eq('stem line drawn (vertical, upward)',
         ctx.rec.lines.length === 1 && ctx.rec.lines[0].y1 < ctx.rec.lines[0].y0, true);
-    eq('text = " = 120"', ctx.rec.texts.map((t) => t.t), [' = 120']);
+    eq('text = "= 120"', ctx.rec.texts.map((t) => t.t), ['= 120']);
 }
 
 console.log('render — drawTempos places marks per row via accessors:');
 {
     const ctx = fakeCtx();
+    delete ctx.openGroup; // фолбэк-режим: глиф несёт координаты напрямую
     drawTempos({
         VF: mockGlyphVF(),
         marks: [{ measure: 0, beat: 0, bpm: 60 }, { measure: 5, beat: 0, bpm: 120 }],
@@ -172,10 +247,22 @@ console.log('render — drawTempos places marks per row via accessors:');
         xOf: (mi) => 20 + mi,
     });
     eq('only laid-out marks drawn (1)', ctx.rec.glyphs.length, 1);
-    eq('drawn at accessor x/baseline', [ctx.rec.glyphs[0].x, ctx.rec.glyphs[0].y], [20, 40]);
+    eq('drawn at accessor x, head lifted above baseline',
+        [ctx.rec.glyphs[0].x, ctx.rec.glyphs[0].y], [20, 35.5]);
 }
+
+console.log('render — duration mapping & per-duration headroom:');
+eq('unit -> duration/dots',
+    [1, 2, 4, 0.5, 0.25, 1.5, 3, 0.75].map((u) => {
+        const d = tempoUnitDuration(u);
+        return d.duration + (d.dots ? '.' : '');
+    }),
+    ['q', 'h', 'w', '8', '16', 'q.', 'h.', '8.']);
 eq('tempoHeadroom: reserves space only with marks',
     [tempoHeadroom([]), tempoHeadroom([{ bpm: 60 }]) > 0], [0, true]);
+eq('flagged 8th needs more headroom than quarter; whole needs less',
+    [tempoMarkHeadroom({ unit: 0.5 }) > tempoMarkHeadroom({ unit: 1 }),
+     tempoMarkHeadroom({ unit: 4 }) < tempoMarkHeadroom({ unit: 1 })], [true, true]);
 
 if (failed > 0) {
     console.log('\n' + failed + ' assertion(s) FAILED');

@@ -29,7 +29,7 @@ import { effectiveVoltas } from '../domain/voltas.js';
 import { readTempoMarks } from '../domain/tempo.js';
 import { setupBarline, drawCustomBarline, drawGrandBarline } from './barlines.js';
 import { drawVoltasInBand, voltaHeadroom } from './voltas.js';
-import { drawTempos, tempoHeadroom } from './tempo.js';
+import { drawTempos, tempoMarkHeadroom } from './tempo.js';
 import { drawNavigation, navigationMarkHeadroom, readNavigation } from './navigation.js';
 import { drawDynamic } from './dynamics.js';
 import { dynamicsBaseline } from './dynamics_layout.js';
@@ -303,7 +303,7 @@ function drawSystem(VF, ctx, sys, yTop, env) {
             baselineOf: function (r, mi) {
                 return bandTopY - topClearOf(mi)
                     - (env.voltaMeasures[mi] ? env.vpad : 0)
-                    - (env.tempoMeasures[mi] ? env.tpad : 0) - MARK_GAP;
+                    - (env.tempoMeasures[mi] || 0) - MARK_GAP;
             },
             boxOf: function (mi) { return voltaBoxes[mi] || null; },
             ctxOf: function () { return ctx; },
@@ -333,15 +333,20 @@ export function renderPrintPages(score) {
     const voltas = effectiveVoltas(measures);
     const vpad = voltaHeadroom(voltas);
     const tempoMarks = readTempoMarks(measures);
-    const tpad = tempoHeadroom(tempoMarks);
     const navMarks = readNavigation(measures);
 
     const voltaMeasures = {};
     for (let s = 0; s < voltas.length; s++) {
         for (let mi = voltas[s].start; mi <= voltas[s].end; mi++) voltaMeasures[mi] = true;
     }
+    // Темп: mi -> пофактовый резерв метки (по её длительности; из нескольких
+    // меток такта — максимум).
     const tempoMeasures = {};
-    for (let t = 0; t < tempoMarks.length; t++) tempoMeasures[tempoMarks[t].measure] = true;
+    for (let t = 0; t < tempoMarks.length; t++) {
+        const m = tempoMarks[t];
+        const p = tempoMarkHeadroom(m);
+        if (!(tempoMeasures[m.measure] >= p)) tempoMeasures[m.measure] = p;
+    }
     // Навигация: mi -> пофактовый резерв ЕЁ символа (глиф Segno/Coda выше текста
     // D.C./Fine — такт с текстом не платит за высоту глифа).
     const navMeasures = {};
@@ -350,7 +355,7 @@ export function renderPrintPages(score) {
     }
     const stackOf = function (mi) {
         return (voltaMeasures[mi] ? vpad : 0)
-             + (tempoMeasures[mi] ? tpad : 0)
+             + (tempoMeasures[mi] || 0)
              + (navMeasures[mi] || 0);
     };
 
@@ -496,7 +501,7 @@ export function renderPrintPages(score) {
                 effTs: effTs, tsStr: tsStr, effKeys: effKeys, bars: bars,
                 sysIndex: sysGi, registry: printObjs, staveReg: printStaves,
                 voltas: voltas, vpad: vpad, voltaMeasures: voltaMeasures,
-                tempoMarks: tempoMarks, tpad: tpad, tempoMeasures: tempoMeasures,
+                tempoMarks: tempoMarks, tempoMeasures: tempoMeasures,
                 navMarks: navMarks, navMeasures: navMeasures,
                 topClearOf: topClearOf,
             });

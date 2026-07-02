@@ -19,7 +19,7 @@ import { readTempoMarks } from '../domain/tempo.js';
 import { noteOnsets, indexAtBeat } from '../domain/dynamics.js';
 import { setupBarline, drawCustomBarline, setupGrandBarline, drawGrandBarline } from './barlines.js';
 import { drawVoltasInBand, voltaHeadroom } from './voltas.js';
-import { drawTempos, tempoHeadroom } from './tempo.js';
+import { drawTempos, tempoMarkHeadroom } from './tempo.js';
 import { drawNavigation, navigationMarkHeadroom, readNavigation } from './navigation.js';
 import { Playback } from '../playback/scheduler.js';
 
@@ -116,10 +116,9 @@ export function render(score, forcedWidth) {
     const voltas = effectiveVoltas(measures);
     const vpad = voltaHeadroom(voltas);
     // Темповые метки (♩ = N) — единое разрешение из domain/tempo, отрисовка общим
-    // со страничной печатью кодом (render/tempo). Живут НАД вольтами; когда они
-    // есть, строка получает доп. headroom (tpad) поверх voltapad.
+    // со страничной печатью кодом (render/tempo). Живут НАД вольтами; такт со
+    // сменой темпа получает пофактовый headroom по длительности своей метки.
     const tempoMarks = readTempoMarks(measures);
-    const tpad = tempoHeadroom(tempoMarks);
     // Навигация (Segno/Coda/D.C./D.S./…) — единое разрешение из render/navigation,
     // отрисовка общим с печатью кодом. Стоит НАД темпом/вольтами (доп. резерв —
     // пофактовый по символу такта: глиф Segno/Coda выше текста D.C./Fine).
@@ -131,8 +130,12 @@ export function render(score, forcedWidth) {
     for (let s = 0; s < voltas.length; s++) {
         for (let mi = voltas[s].start; mi <= voltas[s].end; mi++) voltaMeasures[mi] = true;
     }
-    const tempoMeasures = {};
-    for (let t = 0; t < tempoMarks.length; t++) tempoMeasures[tempoMarks[t].measure] = true;
+    const tempoMeasures = {}; // mi -> пофактовый резерв метки темпа
+    for (let t = 0; t < tempoMarks.length; t++) {
+        const m = tempoMarks[t];
+        const p = tempoMarkHeadroom(m);
+        if (!(tempoMeasures[m.measure] >= p)) tempoMeasures[m.measure] = p;
+    }
     const navMeasures = {}; // mi -> пофактовый резерв символа навигации
     for (let n = 0; n < navMarks.length; n++) {
         navMeasures[navMarks[n].measure] = navigationMarkHeadroom(navMarks[n].id);
@@ -143,7 +146,7 @@ export function render(score, forcedWidth) {
     // Такт без верхних меток даёт 0 — строка из таких тактов не резервирует зазор.
     function stackPadOf(mi) {
         return (voltaMeasures[mi] ? vpad : 0)
-             + (tempoMeasures[mi] ? tpad : 0)
+             + (tempoMeasures[mi] || 0)
              + (navMeasures[mi] || 0);
     }
 
@@ -412,7 +415,7 @@ export function render(score, forcedWidth) {
                 // Навигация — над вольтой И над темпом ЭТОГО такта, если они есть.
                 return rowTopY[r]
                     - (voltaMeasures[mi] ? vpad : 0)
-                    - (tempoMeasures[mi] ? tpad : 0) - MARK_GAP;
+                    - (tempoMeasures[mi] || 0) - MARK_GAP;
             },
             boxOf: function (mi) { return geom[mi] ? { x: geom[mi].x, w: geom[mi].w } : null; },
             ctxOf: function () { return ctx; },
