@@ -50,6 +50,10 @@ const MARK_GAP = 6;        // зазор верхней метки над ниж
 const LAST_SYS_JUSTIFY = 0.6; // последняя система тянется, если fill >= 60%
 const MNUM_PX = 9;         // физический кегль номера такта (px @96dpi)
 const MNUM_GAP = 6;        // воздух между номером такта и слоем под ним
+// Цвет линий стана НА БУМАГЕ: издательская печать — чёрный (ноты и стан одной
+// краской). Экран остаётся на сером дефолте VexFlow (#999999) — там стан
+// намеренно тише нот.
+const STAFF_LINE_COLOR = '#000000';
 
 // Конфигурация станов под инструмент (клефы/голоса; вертикаль — per-system).
 function staffConfig(instrument) {
@@ -144,7 +148,8 @@ function drawSystem(VF, ctx, sys, yTop, env) {
         });
 
         const staves = cfg.staves.map(function (st, si) {
-            const stave = new VF.Stave(x, staveY + dyOf[si], staveW);
+            const stave = new VF.Stave(x, staveY + dyOf[si], staveW,
+                { fill_style: STAFF_LINE_COLOR });
             if (isFirst) {
                 stave.addClef(st.clef);
                 if (cfg.keySig && sysKey) stave.addKeySignature(sysKey, sysCancel || undefined);
