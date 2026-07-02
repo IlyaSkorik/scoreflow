@@ -13,6 +13,8 @@
 // сегментом на каждой; полураскрытие клина на границе системы считается
 // пропорционально ДОЛЕ (а не X), поэтому клин непрерывен через разрыв.
 
+import { DYN_HAIRPIN_GAP } from './dynamics_layout.js';
+
 const COLOR = '#000000';
 const LINE_W = 1.3;
 // Половина раствора клина на широком конце (px) по умолчанию (экран).
@@ -21,8 +23,11 @@ const LINE_W = 1.3;
 export const HAIRPIN_HALF = 5;
 
 // Нарисовать участок клина между xa..xb с полураствором halfA/halfB вокруг центра
-// [yc]. Две симметричные линии (верхняя и нижняя грань клина).
+// [yc]. Две симметричные линии (верхняя и нижняя грань клина). Рисуется в
+// SVG-группе класса sf-hairpin (инспектируемость/аудит).
 export function drawHairpinPart(ctx, xa, xb, yc, halfA, halfB) {
+    const grouped = !!ctx.openGroup;
+    if (grouped) ctx.openGroup('sf-hairpin');
     ctx.save();
     ctx.setLineWidth(LINE_W);
     if (ctx.setStrokeStyle) ctx.setStrokeStyle(COLOR);
@@ -32,6 +37,7 @@ export function drawHairpinPart(ctx, xa, xb, yc, halfA, halfB) {
     ctx.moveTo(xa, yc + halfA); ctx.lineTo(xb, yc + halfB);
     ctx.stroke();
     ctx.restore();
+    if (grouped) ctx.closeGroup();
 }
 
 // Отрисовать все вилки. [spec] — аксессоры пайплайна:
@@ -45,6 +51,9 @@ export function drawHairpinPart(ctx, xa, xb, yc, halfA, halfB) {
 //   half (опц.)             : полураствор устья (по умолчанию HAIRPIN_HALF);
 //                             печать просит больший — издательский раствор
 //                             клина (~3 мм) при гравировочном масштабе
+//   obstaclesOf(row, voice) (опц.) : габариты [{x0,x1}] глифов динамики на той
+//                             же базовой линии — торец клина, упирающийся в
+//                             глиф («p < f»), отступает от него на зазор
 // Вилка, попавшая на несколько систем, режется по строкам; полураствор на каждом
 // конце сегмента = half × доля_положения (для crescendo — растёт слева
 // направо, для diminuendo — наоборот), поэтому клин непрерывен через разрыв.
@@ -79,9 +88,21 @@ export function drawHairpins(spec) {
             const gLm = spec.geomOf(lm), gRm = spec.geomOf(rm);
             if (!gLm || !gRm) continue;
             const atStart = (lm === h.startMeasure), atEnd = (rm === em);
-            const xa = atStart ? spec.xAtBeat(h.startMeasure, h.voice, h.startBeat || 0) : gLm.x;
-            const xb = atEnd ? spec.xAtBeat(em, h.voice, h.endBeat || 0) : (gRm.x + gRm.w);
+            let xa = atStart ? spec.xAtBeat(h.startMeasure, h.voice, h.startBeat || 0) : gLm.x;
+            let xb = atEnd ? spec.xAtBeat(em, h.voice, h.endBeat || 0) : (gRm.x + gRm.w);
             if (xa == null || xb == null || xb <= xa) continue;
+            // Торцы клина не касаются глифов динамики на той же базовой линии
+            // (издательское «p < f»): конец, упирающийся в глиф, отступает.
+            if (spec.obstaclesOf) {
+                const obs = spec.obstaclesOf(r, h.voice) || [];
+                for (let k = 0; k < obs.length; k++) {
+                    const o = obs[k];
+                    if (o.x1 <= xa || o.x0 >= xb) continue;
+                    if (o.x0 <= xa) xa = o.x1 + DYN_HAIRPIN_GAP;
+                    if (o.x1 >= xb) xb = o.x0 - DYN_HAIRPIN_GAP;
+                }
+                if (xb <= xa) continue;
+            }
             const beatA = atStart ? startAbs : starts[lm];
             const beatB = atEnd ? endAbs : starts[rm + 1];
             const fA = (beatA - startAbs) / total;

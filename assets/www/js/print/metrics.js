@@ -16,7 +16,11 @@ const STAFF_SPAN = 40; // высота стана в u
 const STEM = 35;       // стандартный штиль VexFlow (3.5 промежутка)
 const HALF_HEAD = 4;   // полувысота головки
 const ART_PAD = 12;    // высота одной артикуляции над/под головкой
-const TUPLET_PAD = 14; // скобка/цифра туплета со стороны штиля
+const TUPLET_PAD = 20; // скобка/цифра туплета со стороны штиля (скобка VexFlow
+                       // отступает от крайнего штиля и несёт цифру — измерено
+                       // по фактической отрисовке 4.2.2)
+const ACC_ABOVE = 14;  // подъём глифа акциденталии над центром её линейки
+                       // (бемоль — самый высокий: ~1.4 промежутка)
 
 // Номер линейки для ключа VexFlow: 0 — верхняя линейка, 4 — нижняя, шаг 0.5 —
 // промежуток. Меньше 0 — выше стана, больше 4 — ниже. Percussion маппится как
@@ -42,10 +46,15 @@ export function voiceExtents(notes, clef) {
         const n = list[i];
         if (!n || n.rest || !n.keys || !n.keys.length) continue;
         let minL = Infinity, maxL = -Infinity;
+        let accMinL = Infinity; // самая высокая нота СО ЗНАКОМ (диез/бемоль/бекар)
         for (let k = 0; k < n.keys.length; k++) {
-            const l = staffLineOf(n.keys[k], clef);
+            const key = n.keys[k];
+            const l = staffLineOf(key, clef);
             if (l < minL) minL = l;
             if (l > maxL) maxL = l;
+            // Ключ с акциденталией ("db/5", "f#/4", "cn/5"): глиф знака выше
+            // головки — учитываем в верхнем габарите.
+            if (/^[a-gA-G](##|bb|[#bn])/.test(key) && l < accMinL) accMinL = l;
         }
         let yT = minL * 10, yB = maxL * 10;
         const mid = (yT + yB) / 2;
@@ -53,6 +62,11 @@ export function voiceExtents(notes, clef) {
         const stemUp = mid > 20;
         if (stemUp) { yT -= STEM; yB += HALF_HEAD; }
         else { yT -= HALF_HEAD; yB += STEM; }
+        // Глиф акциденталии выше головки (штиль в её сторону может быть выше,
+        // тогда знак уже покрыт) — влить в верхний габарит ПОСЛЕ штиля.
+        if (accMinL !== Infinity && accMinL * 10 - ACC_ABOVE < yT) {
+            yT = accMinL * 10 - ACC_ABOVE;
+        }
         // Артикуляции — на стороне головки (напротив штиля).
         const artN = (n.art && n.art.length) || 0;
         if (artN) {

@@ -19,9 +19,11 @@ ok('glyph size sane', DYN_GLYPH_SIZE >= 24 && DYN_GLYPH_SIZE <= 40);
 
 console.log('default baseline (no notation below staff):');
 {
-    // Ничего ниже стана -> ровный зазор под нижней линейкой (STAFF_GAP=16).
-    eq('staff 100, no notes', dynamicsBaseline(100, []), 116);
-    eq('staff 100, notes on/above staff', dynamicsBaseline(100, [80, 95, 100]), 116);
+    // Ничего ниже стана -> базовая линия на NOTE_CLEAR(17) под нижней
+    // линейкой: глиф оттенка ПОДНИМАЕТСЯ над базовой линией (~13 при кегле
+    // 30), зазор покрывает подъём + воздух.
+    eq('staff 100, no notes', dynamicsBaseline(100, []), 117);
+    eq('staff 100, notes on/above staff', dynamicsBaseline(100, [80, 95, 100]), 117);
     // Согласованность: соседние группы с одинаковой нотацией -> одинаковая база
     // (отсутствие «прыжков»).
     eq('consistent for same inputs', dynamicsBaseline(100, [90]),
@@ -30,21 +32,21 @@ console.log('default baseline (no notation below staff):');
 
 console.log('push below low notation (low notes / stems / ledger lines):');
 {
-    // Самый низкий низ bbox = 130 -> база 130+NOTE_CLEAR(11)=141 (> 116).
-    eq('one low note pushes baseline down', dynamicsBaseline(100, [130]), 141);
+    // Самый низкий низ bbox = 130 -> база 130+NOTE_CLEAR(17)=147 (> 117).
+    eq('one low note pushes baseline down', dynamicsBaseline(100, [130]), 147);
     // База берёт САМЫЙ низкий элемент группы (плотный аккорд/добавочные линейки).
-    eq('lowest of many wins', dynamicsBaseline(100, [105, 150, 120]), 161);
+    eq('lowest of many wins', dynamicsBaseline(100, [105, 150, 120]), 167);
     ok('low notation lowers baseline vs default',
         dynamicsBaseline(100, [150]) > dynamicsBaseline(100, []));
 }
 
 console.log('ceiling cap (grand staff: do not invade the lower staff):');
 {
-    // Очень длинный штиль вниз (низ 300), но потолок (верх bass) = 180 ->
-    // база не глубже 180 - CAP_MARGIN(6) = 174.
-    eq('capped at maxBaseline - margin', dynamicsBaseline(100, [300], 180), 174);
+    // Очень длинный штиль вниз (низ 300), но потолок (верх СОДЕРЖИМОГО bass)
+    // = 180 -> база не глубже 180 - CAP_MARGIN(12): свес глифа + воздух.
+    eq('capped at maxBaseline - margin', dynamicsBaseline(100, [300], 180), 168);
     // Если до потолка далеко — cap не вмешивается.
-    eq('cap not triggered when above it', dynamicsBaseline(100, [120], 180), 131);
+    eq('cap not triggered when above it', dynamicsBaseline(100, [120], 180), 137);
 }
 
 console.log('monotonic in lowest notation (no jitter):');

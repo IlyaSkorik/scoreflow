@@ -12,10 +12,16 @@ import { DYNAMIC_GLYPH, noteOnsets, indexAtBeat, readHairpins } from '../domain/
 import { effectiveTimeSignatures, measureCapacityQ, measureStarts } from '../domain/timesig.js';
 import { dynamicsBaseline, DYN_GLYPH_SIZE } from './dynamics_layout.js';
 import { drawHairpins } from './hairpins.js';
+import { measureExtents } from '../print/metrics.js';
+
+// Клеф голоса — для модельных габаритов (print/metrics, общие с печатью).
+const CLEF_OF = { treble: 'treble', bass: 'bass', perc: 'percussion' };
 
 // Рисует строку-оттенок [markId] нотным шрифтом по ЦЕНТРУ x на базовой линии y.
 // Каждая буква (p/m/f/…) — отдельный SMuFL-глиф; ширина берётся из метрик глифа
-// для центрирования и набора многобуквенных меток (mf, ppp, …).
+// для центрирования и набора многобуквенных меток (mf, ppp, …). Рисуется в
+// SVG-группе класса sf-dyn (инспектируемость/аудит). Возвращает ГАБАРИТ
+// { x0, x1 } нарисованной метки — вилки того же голоса обходят его по X.
 export function drawDynamic(VF, ctx, x, y, markId, size) {
     const fontSize = size || DYN_GLYPH_SIZE;
     const letters = String(markId).split('');
@@ -35,11 +41,16 @@ export function drawDynamic(VF, ctx, x, y, markId, size) {
         total += w;
     }
     let gx = x - total / 2;
+    const box = { x0: gx, x1: gx + total };
+    const grouped = !!ctx.openGroup;
+    if (grouped) ctx.openGroup('sf-dyn');
     for (let i = 0; i < glyphs.length; i++) {
         try { glyphs[i].g.render(ctx, gx, y); }
         catch (e) { /* пропуск битого глифа */ }
         gx += glyphs[i].w;
     }
+    if (grouped) ctx.closeGroup();
+    return box;
 }
 
 // Экранный проход. Базовая линия — ОДНА на (система[row]+голос) через общий
@@ -53,8 +64,12 @@ export function drawScreenDynamics(VF, ctx, score) {
 
     // --- 1. Согласованная база: низы bbox ВСЕХ нот по (row, voice) ---
     const bottoms = {};   // "row:voice" -> [bottomY...]
+    const tops = {};      // "row:voice" -> минимальный Y содержимого (для cap)
     const staffBot = {};  // "row:voice" -> Y нижней линейки
     const staffTop = {};  // "row:voice" -> Y верхней линейки (для cap)
+    const seeTop = function (key, y) {
+        if (tops[key] == null || y < tops[key]) tops[key] = y;
+    };
     for (let mi = 0; mi < measures.length; mi++) {
         const row = rowOf(mi);
         for (let vi = 0; vi < voices.length; vi++) {
@@ -70,19 +85,60 @@ export function drawScreenDynamics(VF, ctx, score) {
         const hh = state.noteHits[h];
         const key = rowOf(hh.m) + ':' + hh.v;
         (bottoms[key] || (bottoms[key] = [])).push(hh.y + hh.h);
+        seeTop(key, hh.y);
+    }
+    // Балки не входят в bbox нот — их низы обязаны попасть в профиль
+    // (иначе mf ложится на балку бас-бочки).
+    const beams = state.beamBottoms || [];
+    for (let b = 0; b < beams.length; b++) {
+        const bb = beams[b];
+        const key = rowOf(bb.m) + ':' + bb.v;
+        (bottoms[key] || (bottoms[key] = [])).push(bb.bottom);
+        seeTop(key, bb.top);
+    }
+    // Модельные габариты (как у печати): скобки туплетов и артикуляции НИЖЕ
+    // нот не входят в bbox VexFlow-ноты — базовая линия оттенков обязана
+    // пройти и под ними (иначе pp ложится на скобку «3»).
+    for (let vi = 0; vi < voices.length; vi++) {
+        const v = voices[vi];
+        const ext = measureExtents(measures, v, CLEF_OF[v] || 'treble');
+        for (let mi = 0; mi < measures.length; mi++) {
+            const e = ext[mi];
+            if (!e) continue;
+            const key = rowOf(mi) + ':' + v;
+            if (e.below > 0) {
+                const sb = state.staffBottomY[mi + ':' + v];
+                if (sb != null) {
+                    (bottoms[key] || (bottoms[key] = [])).push(sb + e.below);
+                }
+            }
+            if (e.above > 0) {
+                const st = state.staffTopY[mi + ':' + v];
+                if (st != null) seeTop(key, st - e.above);
+            }
+        }
     }
 
-    // --- 2. Базовая линия группы. Для treble в grand staff потолок = верх
-    //         нижнего (bass) стана той же строки, чтобы не залезть на него. ---
+    // --- 2. Базовая линия группы. Для treble в grand staff потолок — верх
+    //         СОДЕРЖИМОГО нижнего (bass) стана той же строки (штили баса
+    //         поднимаются выше его верхней линейки), не только линейка. ---
     const baseline = {};
     for (const key in staffBot) {
         const parts = key.split(':');
         const row = parts[0], v = parts[1];
-        const cap = (v === 'treble') ? staffTop[row + ':bass'] : null;
+        let cap = null;
+        if (v === 'treble') {
+            cap = staffTop[row + ':bass'];
+            const ct = tops[row + ':bass'];
+            if (ct != null && (cap == null || ct < cap)) cap = ct;
+        }
         baseline[key] = dynamicsBaseline(staffBot[key], bottoms[key], cap);
     }
 
-    // --- 3. Отрисовка: глиф по центру ноты на базовой линии группы ---
+    // --- 3. Отрисовка: глиф по центру ноты на базовой линии группы.
+    //         Габариты нарисованных глифов копятся по (row:voice) — вилки
+    //         обходят их по X (издательское «p < f» без касаний). ---
+    const dynBoxes = {}; // "row:voice" -> [{x0,x1}...]
     for (let mi = 0; mi < measures.length; mi++) {
         const dynAll = measures[mi] && measures[mi]._dyn;
         if (!dynAll) continue;
@@ -100,7 +156,9 @@ export function drawScreenDynamics(VF, ctx, score) {
                 const id = mi + ':' + v + ':' + (idx >= 0 ? idx : -1);
                 const hb = state.noteHitIndex[id];
                 if (!hb) continue;
-                drawDynamic(VF, ctx, hb.x + hb.w / 2, y, d.mark);
+                const box = drawDynamic(VF, ctx, hb.x + hb.w / 2, y, d.mark);
+                const bk = key0 + ':' + v;
+                (dynBoxes[bk] || (dynBoxes[bk] = [])).push(box);
             }
         }
     }
@@ -108,7 +166,8 @@ export function drawScreenDynamics(VF, ctx, score) {
     // --- 4. Вилки (cresc./dim.) — ТОТ ЖЕ базовый уровень, что и оттенки. X доли
     //         берём из позиций нот (state.noteHitIndex), геометрию клина считает
     //         общий слой render/hairpins (тот же код, что и для PDF). ---
-    drawScreenHairpins(ctx, measures, geom, baseline, score.timeSignature || '4/4');
+    drawScreenHairpins(ctx, measures, geom, baseline, dynBoxes,
+        score.timeSignature || '4/4');
 }
 
 // X центра доли [localBeat] такта [mi]/[v] на экране: центр ноты этой доли из
@@ -128,7 +187,7 @@ function screenXAtBeat(measures, geom, mi, v, localBeat, capsQ) {
 }
 
 // Экранный проход вилок — строит аксессоры и делегирует в общий drawHairpins.
-function drawScreenHairpins(ctx, measures, geom, baseline, tsStr) {
+function drawScreenHairpins(ctx, measures, geom, baseline, dynBoxes, tsStr) {
     const hairpins = readHairpins(measures);
     if (!hairpins.length) return;
     const effTs = effectiveTimeSignatures(measures, tsStr);
@@ -143,6 +202,7 @@ function drawScreenHairpins(ctx, measures, geom, baseline, tsStr) {
             const y = baseline[row + ':' + v];
             return y == null ? null : y;
         },
+        obstaclesOf: function (row, v) { return dynBoxes[row + ':' + v] || null; },
         xAtBeat: function (mi, v, b) { return screenXAtBeat(measures, geom, mi, v, b, capsQ); },
         ctxOf: function () { return ctx; },
     });
