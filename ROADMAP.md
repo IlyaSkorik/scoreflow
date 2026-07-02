@@ -3,12 +3,14 @@
 > Single source of truth for the project's state. Completed items are verified
 > against the actual codebase, not aspirations.
 >
-> Last reviewed: **2026-07-01** · Flutter 3.44.3 · Material 3 · VexFlow 4.2.2 · ES Modules.
-> Latest: professional Navigation System (Segno, Coda, To Coda, Fine, D.C./D.S.
-> and their al Fine / al Coda variants) — first-class notation objects forming
-> their own layer. Playback expansion is now linear → repeats → voltas →
-> navigation → events → scheduler; the compiler is the only authority, jumps are
-> deterministic and loop-free, and the scheduler stays notation-agnostic.
+> Last reviewed: **2026-07-02** · Flutter 3.44.3 · Material 3 · VexFlow 4.2.2 · ES Modules.
+> Latest: shared Placement Engine (`js/render/placement.js` + `top_band.js`) —
+> skyline-based collision solver for voltas/tempo/navigation above the staff,
+> real measured bounding boxes for every mark, per-row adaptive vertical
+> profiles on screen (mirroring print `systemProfile`), hairpins trimmed around
+> dynamic glyphs, tuplet/beam/accidental extents in the vertical model. Both
+> pipelines verified collision-free by a numeric SVG audit
+> (`test/print/audit.html`) across all fixtures.
 
 ---
 
@@ -295,6 +297,23 @@ Secondary goals:
 * [x] Shared engraving algorithms
 * [x] Dynamics collision avoidance
 * [x] Shared screen/PDF dynamics placement
+* [x] Shared Placement Engine (`js/render/placement.js`, `js/render/top_band.js`)
+
+  * Skyline collision solver: every object above the staff (volta, tempo,
+    navigation) is placed by its real bounding box over the occupied profile
+    (note/stem/accidental extents included) — no per-layer constant stacking
+  * Volta segments share one rail per system; tempo text crossing a barline
+    honestly collides with the neighbour's volta and rises above it
+  * Real measured mark extents (engraved tempo note via draw-recorder,
+    Segno/Coda glyph descents via `glyphExtents`) instead of guessed constants
+  * Conservative reservation before drawing, exact placement after — skyline
+    monotonicity guarantees the reserve always fits (same engine, both passes)
+  * Per-row adaptive vertical profiles on screen (mirror of print
+    `systemProfile`): bassDY and row height per row, beams/tuplets/glyph
+    rise-drop in the dynamics band, hairpins trimmed around dynamic glyphs
+  * Numeric collision audit harness (`test/print/audit.html`): SVG layers
+    tagged (`sf-volta/tempo/nav/dyn/hairpin/tuplet/mnum`), pairwise bbox
+    overlap report for print pages and screen — zero collisions on all fixtures
 * [x] Print Layout Engine (`js/print/`)
 
   * Paper-first geometry: A4 from millimetres, publishing engraving scale (7 mm staff) via single SVG viewBox
@@ -447,10 +466,10 @@ Secondary goals:
 
 ## 🎨 Engraving
 
-* [ ] Automatic articulation collision avoidance
-* [ ] Hairpin collision avoidance
+* [x] Hairpin collision avoidance (dynamic-glyph trimming, shared baseline band)
+* [x] Better vertical spacing (skyline top band + per-row/system profiles)
+* [ ] Automatic articulation collision avoidance (beyond VexFlow ModifierContext)
 * [ ] Better horizontal spacing
-* [ ] Better vertical spacing
 * [ ] System justification improvements
 * [ ] Page justification improvements
 
