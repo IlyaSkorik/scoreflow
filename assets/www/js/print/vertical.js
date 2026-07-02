@@ -5,15 +5,16 @@
 // важнее плотности — при нехватке место ДОБАВЛЯЕТСЯ (высота системы растёт),
 // а не отбирается у соседей. Модуль ЧИСТЫЙ (без VF/DOM) — тестируется в Node.
 //
-// Константы динамики зеркалят render/dynamics_layout.js (единый алгоритм
-// базовой линии): базовая линия = max(стан+16, низ нот+11); ниже неё глиф
-// оттенка опускает хвосты и вилка кладёт клин — резервируем DYN_DESCENT.
+// Константы динамики ИМПОРТИРУЮТСЯ из render/dynamics_layout.js (единый
+// алгоритм базовой линии, один источник чисел): базовая линия = max(стан+GAP,
+// низ нот+CLEAR); ниже неё глиф оттенка опускает хвосты и вилка кладёт клин —
+// резервируем DYN_DESCENT.
 import { STAFF_H } from './paper.js';
+import {
+    DYN_STAFF_GAP, DYN_NOTE_CLEAR, DYN_DESCENT,
+} from '../render/dynamics_layout.js';
 
 const GAP_MIN_GRAND = 52;  // мин. просвет между станами аколады (издательский)
-const DYN_STAFF_GAP = 16;  // = dynamics_layout.STAFF_GAP
-const DYN_NOTE_CLEAR = 11; // = dynamics_layout.NOTE_CLEAR
-const DYN_DESCENT = 20;    // хвосты глифов (f, p) + клин вилки (half 8 + drop 8)
 const AIR = 6;             // воздух между слоями
 const PAD_TOP_MIN = 10;    // мин. верхний резерв системы
 const PAD_BOT_MIN = 14;    // мин. нижний резерв системы
@@ -32,7 +33,9 @@ function belowNeed(below, hasDyn) {
 //   extBottom  — габариты нижнего голоса (bass) или null
 //   dynTop     — bool[] наличия динамики/вилок верхнего голоса по тактам
 //   dynBottom  — bool[] нижнего голоса или null
-//   stackOf(mi)— высота столбика верхних меток такта (вольта+темп+навигация)
+//   topReserve — резерв НАД верхней линейкой (px): решение движка размещения
+//                (render/top_band.solveTopBand) — выступ нот + вольты + темп +
+//                навигация по skyline-профилю, а не сумма слоёв
 // Возвращает: { padTop, gapTB, bassDY, padBottom, height }
 //   padTop     — резерв над верхней линейкой верхнего стана
 //   bassDY     — сдвиг верхней линейки bass от верхней линейки treble (grand)
@@ -40,15 +43,12 @@ function belowNeed(below, hasDyn) {
 //   height     — полная высота системы
 export function systemProfile(spec) {
     const items = spec.items || [];
-    let topAbove = 0, topBelow = 0, botAbove = 0, botBelow = 0;
-    let dynT = false, dynB = false, stackMax = 0;
+    let topBelow = 0, botAbove = 0, botBelow = 0;
+    let dynT = false, dynB = false;
     for (let k = 0; k < items.length; k++) {
         const mi = items[k];
         const et = spec.extTop[mi];
-        if (et) {
-            if (et.above > topAbove) topAbove = et.above;
-            if (et.below > topBelow) topBelow = et.below;
-        }
+        if (et && et.below > topBelow) topBelow = et.below;
         if (spec.extBottom) {
             const eb = spec.extBottom[mi];
             if (eb) {
@@ -58,13 +58,9 @@ export function systemProfile(spec) {
         }
         if (spec.dynTop && spec.dynTop[mi]) dynT = true;
         if (spec.dynBottom && spec.dynBottom[mi]) dynB = true;
-        // Верхние метки такта стоят НАД выступающими нотами этого такта.
-        const st = spec.stackOf ? spec.stackOf(mi) : 0;
-        const need = st > 0 ? st + (et ? et.above : 0) : (et ? et.above : 0);
-        if (need > stackMax) stackMax = need;
     }
 
-    const padTop = Math.max(PAD_TOP_MIN, stackMax + AIR / 2);
+    const padTop = Math.max(PAD_TOP_MIN, (spec.topReserve || 0) + AIR / 2);
     if (!spec.grand) {
         const padBottom = Math.max(PAD_BOT_MIN, belowNeed(topBelow, dynT) + AIR / 2);
         return {

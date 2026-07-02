@@ -16,6 +16,8 @@
 // tempoUnitDuration — редактору достаточно выставить unit (2, 1.5, 0.5 …),
 // рендер уже умеет половинные/восьмые/пунктирные.
 
+import { measureCtx } from './measure.js';
+
 const COLOR = '#000000';
 const FONT = 13;         // кегль текста « = N»
 const SCALE = 0.8;       // нота компактнее нот стана — метрономный знак
@@ -72,36 +74,7 @@ export function tempoHeadroom(marks) {
 // меток переиспользуют один объект — при отрисовке меняются только контекст и
 // transform группы). Габариты меряются пробной отрисовкой в рекордер — точные
 // края (флажок, точки) без доверия к getBoundingBox (он игнорирует укорочение).
-const noteCache = new Map(); // 'q:1' -> { note, headLeft, headCenterY, right }
-
-// Рекордер-контекст: полный набор методов, которые дергает StaveNote.draw();
-// пишет только габариты путей.
-function measureCtx() {
-    const m = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
-    const track = function (pts) {
-        for (let i = 0; i + 1 < pts.length; i += 2) {
-            if (pts[i] < m.minX) m.minX = pts[i];
-            if (pts[i] > m.maxX) m.maxX = pts[i];
-            if (pts[i + 1] < m.minY) m.minY = pts[i + 1];
-            if (pts[i + 1] > m.maxY) m.maxY = pts[i + 1];
-        }
-    };
-    const noop = function () {};
-    return {
-        m: m,
-        openGroup: function () { return { setAttribute: noop, appendChild: noop, style: {} }; },
-        closeGroup: noop, save: noop, restore: noop, beginPath: noop, closePath: noop,
-        fill: noop, stroke: noop, setLineWidth: noop, setFont: noop, setFillStyle: noop,
-        setStrokeStyle: noop, setLineDash: noop, fillText: noop, rect: noop,
-        measureText: function () { return { width: 0 }; },
-        moveTo: function (x, y) { track([x, y]); },
-        lineTo: function (x, y) { track([x, y]); },
-        bezierCurveTo: function (a, b, c, d, e, f) { track([a, b, c, d, e, f]); },
-        quadraticCurveTo: function (a, b, c, d) { track([a, b, c, d]); },
-        arc: function (x, y, r) { track([x - r, y - r, x + r, y + r]); },
-        fillRect: function (x, y, w, h) { track([x, y, x + w, y + h]); },
-    };
-}
+const noteCache = new Map(); // 'q:1' -> { note, headLeft, headCenterY, right, top, bottom }
 
 function engravedNote(VF, duration, dots) {
     const key = duration + ':' + (dots || 0);
@@ -128,9 +101,49 @@ function engravedNote(VF, duration, dots) {
         headLeft: mc.m.minX,
         headCenterY: note.getYs()[0],
         right: mc.m.maxX,
+        top: mc.m.minY,
+        bottom: mc.m.maxY,
     };
     noteCache.set(key, info);
     return info;
+}
+
+// РЕАЛЬНЫЙ габарит метки «(нота) = N» для движка размещения (placement):
+//   width — полная ширина (нота + « = N» текстом кегля FONT),
+//   rise  — подъём верха метки НАД базовой линией текста (флажок/штиль),
+//   drop  — свес НИЖЕ базовой линии (низ головки у целой/половинной).
+// Нота меряется пробной отрисовкой (кеш engravedNote), текст — через
+// ctx.measureText. Без ctx/VF — оценка по константам (headroom прежней схемы).
+export function tempoMarkExtents(VF, ctx, mark) {
+    const d = tempoUnitDuration(mark && mark.unit);
+    const text = '= ' + (mark && mark.bpm != null ? mark.bpm : '');
+    let noteW = 11.9 * SCALE;
+    let rise = HEAD_LIFT + SCALE *
+        (ABOVE_CENTER[d.duration] != null ? ABOVE_CENTER[d.duration] : 22);
+    let drop = 0;
+    if (VF && VF.StaveNote) {
+        try {
+            const info = engravedNote(VF, d.duration, d.dots);
+            noteW = SCALE * (info.right - info.headLeft);
+            rise = HEAD_LIFT + SCALE * (info.headCenterY - info.top);
+            drop = SCALE * (info.bottom - info.headCenterY) - HEAD_LIFT;
+        } catch (e) { /* оценки выше */ }
+    }
+    let textW = text.length * FONT * 0.55;
+    if (ctx && ctx.measureText) {
+        try {
+            ctx.save();
+            ctx.setFont('serif', FONT, '');
+            const m = ctx.measureText(text);
+            if (m && m.width > 0) textW = m.width;
+            ctx.restore();
+        } catch (e) { /* оценка выше */ }
+    }
+    return {
+        width: noteW + EQ_GAP + textW,
+        rise: Math.max(rise, FONT * 0.75),
+        drop: Math.max(0, drop, FONT * 0.25),
+    };
 }
 
 // Нарисовать одну метку «(нота) = bpm». [x] — левый край головки, [y] — базовая
@@ -201,24 +214,31 @@ function drawFallbackNote(VF, ctx, x, y) {
 // Отрисовать все темповые метки. [spec] — аксессоры пайплайна:
 //   VF, marks : [{ measure, beat, bpm, unit }]
 //   rowOf(mi)          : строка/система такта (или null)
-//   baselineOf(row,mi) : Y базовой линии метки (пофактовое — зависит от того,
-//                        что реально стоит НАД этим тактом; или null)
+//   yOf(mark, i)       : Y базовой линии метки от движка размещения (или null)
+//   baselineOf(row,mi) : легаси-фолбэк, если yOf не задан
 //   xOf(mi, beat)      : X позиции доли (или null)
 //   ctxOf(row)         : графический контекст строки/системы
+// Каждая метка рисуется в SVG-группе класса sf-tempo (инспектируемость/аудит).
 export function drawTempos(spec) {
     const marks = spec.marks || [];
     for (let i = 0; i < marks.length; i++) {
         const m = marks[i];
         const r = spec.rowOf(m.measure);
         if (r == null) continue;
-        const y = spec.baselineOf(r, m.measure);
+        const y = spec.yOf ? spec.yOf(m, i) : spec.baselineOf(r, m.measure);
         if (y == null) continue;
         const ctx = spec.ctxOf(r);
         if (!ctx) continue;
         const x = spec.xOf(m.measure, m.beat || 0);
         if (x == null) continue;
         const d = tempoUnitDuration(m.unit);
-        drawTempoMark(spec.VF, ctx, x, y,
-            { duration: d.duration, dots: d.dots, bpm: m.bpm });
+        const grouped = !!ctx.openGroup;
+        if (grouped) ctx.openGroup('sf-tempo');
+        try {
+            drawTempoMark(spec.VF, ctx, x, y,
+                { duration: d.duration, dots: d.dots, bpm: m.bpm });
+        } finally {
+            if (grouped) ctx.closeGroup();
+        }
     }
 }

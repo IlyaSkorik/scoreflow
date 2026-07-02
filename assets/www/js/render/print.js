@@ -28,9 +28,10 @@ import { effectiveRepeatBarlines } from '../domain/repeats.js';
 import { effectiveVoltas } from '../domain/voltas.js';
 import { readTempoMarks } from '../domain/tempo.js';
 import { setupBarline, drawCustomBarline, drawGrandBarline } from './barlines.js';
-import { drawVoltasInBand, voltaHeadroom } from './voltas.js';
-import { drawTempos, tempoMarkHeadroom } from './tempo.js';
-import { drawNavigation, navigationMarkHeadroom, readNavigation } from './navigation.js';
+import { drawVoltasInBand } from './voltas.js';
+import { drawTempos } from './tempo.js';
+import { drawNavigation, readNavigation } from './navigation.js';
+import { solveTopBand } from './top_band.js';
 import { drawDynamic } from './dynamics.js';
 import { dynamicsBaseline } from './dynamics_layout.js';
 import { noteOnsets, indexAtBeat, readHairpins } from '../domain/dynamics.js';
@@ -46,7 +47,6 @@ const MEASURE_PAD = 14;    // правый запас в такте (дыхан�
 const NOTE_RIGHT_PAD = 10; // запас справа от последней ноты
 const SYS_GAP_MIN = 26;    // мин. интервал между системами (к их резервам)
 const SYS_GAP_MAX = 64;    // потолок интервала при вертикальном justify
-const MARK_GAP = 6;        // зазор верхней метки над нижележащим слоем
 const LAST_SYS_JUSTIFY = 0.6; // последняя система тянется, если fill >= 60%
 const MNUM_PX = 9;         // физический кегль номера такта (px @96dpi)
 const MNUM_GAP = 6;        // воздух между номером такта и слоем под ним
@@ -203,7 +203,24 @@ function drawSystem(VF, ctx, sys, yTop, env) {
                 maintain_stem_directions: true,
             });
             v.draw(ctx, staves[si]);
-            beams.forEach(function (b) { b.setContext(ctx).draw(); });
+            beams.forEach(function (b) {
+                b.setContext(ctx).draw();
+                // Габарит балки — в профиль динамики (drawPrintDynamics):
+                // балки не входят в bbox нот.
+                if (env.beamReg) {
+                    const n0 = b.getNotes && b.getNotes()[0];
+                    if (n0 && n0.__hit) {
+                        try {
+                            const bb = b.getBoundingBox();
+                            if (bb) {
+                                const bk = env.sysIndex + ':' + n0.__hit.v;
+                                (env.beamReg[bk] || (env.beamReg[bk] = []))
+                                    .push({ top: bb.getY(), bottom: bb.getY() + bb.getH() });
+                            }
+                        } catch (e) { /* нет bbox — пропуск */ }
+                    }
+                }
+            });
             if (env.registry) {
                 v.getTickables().forEach(function (t) {
                     if (!t.__hit || t.__hit.i < 0) return;
@@ -213,8 +230,11 @@ function drawSystem(VF, ctx, sys, yTop, env) {
             }
         });
         tuplets.forEach(function (t) {
-            try { t.setContext(ctx).draw(); }
-            catch (e) { console.error('tuplet draw failed:', e); }
+            try {
+                if (ctx.openGroup) ctx.openGroup('sf-tuplet');
+                try { t.setContext(ctx).draw(); }
+                finally { if (ctx.openGroup) ctx.closeGroup(); }
+            } catch (e) { console.error('tuplet draw failed:', e); }
         });
 
         if (isFirst && cfg.grand) {
@@ -232,6 +252,7 @@ function drawSystem(VF, ctx, sys, yTop, env) {
         if (isFirst && sys.firstMeasure > 0) {
             const size = env.geom.fontU(MNUM_PX);
             const label = String(sys.firstMeasure + 1);
+            if (ctx.openGroup) ctx.openGroup('sf-mnum');
             ctx.save();
             ctx.setFont('serif', size, 'italic');
             let tw = label.length * size * 0.5;
@@ -241,6 +262,7 @@ function drawSystem(VF, ctx, sys, yTop, env) {
             } catch (e) { /* оценка выше */ }
             ctx.fillText(label, x - 3 - tw, staves[0].getYForLine(0) - MNUM_GAP);
             ctx.restore();
+            if (ctx.openGroup) ctx.closeGroup();
         }
 
         voltaBoxes[idx] = { x: x, w: staveW };
@@ -250,64 +272,63 @@ function drawSystem(VF, ctx, sys, yTop, env) {
     });
 
     // --- Верхние метки системы: вольты -> темп -> навигация --------------
-    // Каждый слой стоит НАД выступающими нотами такта (topClearOf) и над
-    // нижележащими слоями ЭТОГО такта — ровно то место, что зарезервировал
-    // vertical.systemProfile.
-    const topClearOf = env.topClearOf;
-    if (env.voltas && env.voltas.length && bandTopY != null) {
-        // Линия вольты одна на систему — поднимаем над самым высоким тактом
-        // из тактов её диапазона в ЭТОЙ системе.
-        let clear = 0;
-        for (let s = 0; s < env.voltas.length; s++) {
-            const sp = env.voltas[s];
-            for (let mi = sp.start; mi <= sp.end; mi++) {
-                if (voltaBoxes[mi] && topClearOf(mi) > clear) clear = topClearOf(mi);
+    // Размещение — ОБЩИЙ движок (render/top_band, тот же, что на экране):
+    // skyline по выступающим нотам + реальные габариты меток и РЕАЛЬНЫЕ якоря
+    // (X нот из registry). Резерв места сделал vertical.systemProfile тем же
+    // движком с консервативными габаритами — здесь метки садятся максимально
+    // низко без столкновений и гарантированно в пределах резерва.
+    if (bandTopY != null) {
+        const primary = cfg.staves[0].voice;
+        const boxOf = function (mi) { return voltaBoxes[mi] || null; };
+        const xOf = function (mi, beat) {
+            const notes = (measures[mi] && measures[mi][primary]) || [];
+            const idx = indexAtBeat(noteOnsets(notes), beat);
+            if (idx >= 0) {
+                const obj = env.registry[mi + ':' + primary + ':' + idx];
+                if (obj && obj.sn) {
+                    try { return obj.sn.getAbsoluteX(); } catch (e) { /* fallthrough */ }
+                }
+            }
+            return voltaBoxes[mi] ? voltaBoxes[mi].x + 2 : null;
+        };
+        const inSys = function (m) { return voltaBoxes[m.measure] != null; };
+        const sysTempo = (env.tempoMarks || []).filter(inSys);
+        const sysNav = (env.navMarks || []).filter(inSys);
+        if ((env.voltas && env.voltas.length) || sysTempo.length || sysNav.length) {
+            const band = solveTopBand({
+                VF: VF, ctx: ctx, staffTop: bandTopY,
+                measures: sys.items,
+                boxOf: boxOf,
+                aboveOf: env.topClearOf,
+                voltas: env.voltas,
+                tempoMarks: sysTempo,
+                navMarks: sysNav,
+                anchorXOf: function (m) { return xOf(m.measure, m.beat || 0); },
+            });
+            if (env.voltas && env.voltas.length) {
+                drawVoltasInBand(ctx, env.voltas, boxOf, bandTopY, band.voltaYOf);
+            }
+            if (sysTempo.length) {
+                drawTempos({
+                    VF: VF,
+                    marks: sysTempo,
+                    rowOf: function () { return 0; },
+                    yOf: function (m, i) { return band.tempoYOf(i); },
+                    ctxOf: function () { return ctx; },
+                    xOf: xOf,
+                });
+            }
+            if (sysNav.length) {
+                drawNavigation({
+                    VF: VF,
+                    marks: sysNav,
+                    rowOf: function () { return 0; },
+                    yOf: function (m, i) { return band.navYOf(i); },
+                    boxOf: boxOf,
+                    ctxOf: function () { return ctx; },
+                });
             }
         }
-        drawVoltasInBand(ctx, env.voltas,
-            function (mi) { return voltaBoxes[mi] || null; }, bandTopY - clear);
-    }
-
-    if (env.tempoMarks && env.tempoMarks.length && bandTopY != null) {
-        const primary = cfg.staves[0].voice;
-        const sysMarks = env.tempoMarks.filter(function (m) { return voltaBoxes[m.measure]; });
-        drawTempos({
-            VF: VF,
-            marks: sysMarks,
-            rowOf: function () { return 0; },
-            baselineOf: function (r, mi) {
-                return bandTopY - topClearOf(mi)
-                    - (env.voltaMeasures[mi] ? env.vpad : 0) - MARK_GAP;
-            },
-            ctxOf: function () { return ctx; },
-            xOf: function (mi, beat) {
-                const notes = (measures[mi] && measures[mi][primary]) || [];
-                const idx = indexAtBeat(noteOnsets(notes), beat);
-                if (idx >= 0) {
-                    const obj = env.registry[mi + ':' + primary + ':' + idx];
-                    if (obj && obj.sn) {
-                        try { return obj.sn.getAbsoluteX(); } catch (e) { /* fallthrough */ }
-                    }
-                }
-                return voltaBoxes[mi] ? voltaBoxes[mi].x + 2 : null;
-            },
-        });
-    }
-
-    if (env.navMarks && env.navMarks.length && bandTopY != null) {
-        const sysNav = env.navMarks.filter(function (m) { return voltaBoxes[m.measure]; });
-        drawNavigation({
-            VF: VF,
-            marks: sysNav,
-            rowOf: function () { return 0; },
-            baselineOf: function (r, mi) {
-                return bandTopY - topClearOf(mi)
-                    - (env.voltaMeasures[mi] ? env.vpad : 0)
-                    - (env.tempoMeasures[mi] || 0) - MARK_GAP;
-            },
-            boxOf: function (mi) { return voltaBoxes[mi] || null; },
-            ctxOf: function () { return ctx; },
-        });
     }
 }
 
@@ -331,33 +352,8 @@ export function renderPrintPages(score) {
     const tsStr = effTs.map(function (t) { return t.beats + '/' + t.beatValue; });
     const bars = effectiveRepeatBarlines(measures, effectiveBarlines(measures));
     const voltas = effectiveVoltas(measures);
-    const vpad = voltaHeadroom(voltas);
     const tempoMarks = readTempoMarks(measures);
     const navMarks = readNavigation(measures);
-
-    const voltaMeasures = {};
-    for (let s = 0; s < voltas.length; s++) {
-        for (let mi = voltas[s].start; mi <= voltas[s].end; mi++) voltaMeasures[mi] = true;
-    }
-    // Темп: mi -> пофактовый резерв метки (по её длительности; из нескольких
-    // меток такта — максимум).
-    const tempoMeasures = {};
-    for (let t = 0; t < tempoMarks.length; t++) {
-        const m = tempoMarks[t];
-        const p = tempoMarkHeadroom(m);
-        if (!(tempoMeasures[m.measure] >= p)) tempoMeasures[m.measure] = p;
-    }
-    // Навигация: mi -> пофактовый резерв ЕЁ символа (глиф Segno/Coda выше текста
-    // D.C./Fine — такт с текстом не платит за высоту глифа).
-    const navMeasures = {};
-    for (let n = 0; n < navMarks.length; n++) {
-        navMeasures[navMarks[n].measure] = navigationMarkHeadroom(navMarks[n].id);
-    }
-    const stackOf = function (mi) {
-        return (voltaMeasures[mi] ? vpad : 0)
-             + (tempoMeasures[mi] || 0)
-             + (navMeasures[mi] || 0);
-    };
 
     const changedAt = function (i) {
         return effKeys && i > 0 && effKeys[i] !== effKeys[i - 1];
@@ -440,7 +436,34 @@ export function renderPrintPages(score) {
     });
 
     // --- Проход 4: вертикальный профиль каждой системы ---------------------
+    // Резерв верхней полосы (выступ нот + вольты + темп + навигация) — ОБЩИЙ
+    // движок размещения (render/top_band): skyline по X-габаритам тактов
+    // системы (ширины известны после прохода 3). Якоря нот ещё неизвестны —
+    // габариты меток консервативны; точное размещение при отрисовке
+    // (drawSystem) гарантированно уложится в резерв (монотонность skyline).
+    const boxesOfSystem = function (sys) {
+        const boxes = {};
+        let x = geom.mx;
+        sys.items.forEach(function (idx, pos) {
+            const w = (pos === 0 ? sys.L : 0) + sys.widths[idx];
+            boxes[idx] = { x: x, w: w };
+            x += w;
+        });
+        return boxes;
+    };
     systems.forEach(function (sys) {
+        const boxes = boxesOfSystem(sys);
+        const inSys = function (m) { return boxes[m.measure] != null; };
+        const band = solveTopBand({
+            VF: VF, ctx: ctx0, staffTop: 0,
+            measures: sys.items,
+            boxOf: function (mi) { return boxes[mi] || null; },
+            aboveOf: topClearOf,
+            voltas: voltas,
+            tempoMarks: tempoMarks.filter(inSys),
+            navMarks: navMarks.filter(inSys),
+            anchorXOf: null,
+        });
         sys.pro = systemProfile({
             grand: cfg.grand,
             items: sys.items,
@@ -448,7 +471,7 @@ export function renderPrintPages(score) {
             extBottom: extBottom,
             dynTop: dynTop,
             dynBottom: dynBottom,
-            stackOf: stackOf,
+            topReserve: band.padTop,
         });
         // Резерв под номер такта: сидит низко над станом слева от системы
         // (см. drawSystem) — системе достаточно места на высоту текста.
@@ -473,6 +496,7 @@ export function renderPrintPages(score) {
     // --- Отрисовка страниц ---------------------------------------------------
     const printObjs = {};   // noteId -> {sn, ctx, sys} (проход лиг)
     const printStaves = {}; // "mi:voice" -> {stave, ctx, sys} (проход оттенков)
+    const printBeams = {};  // "sys:voice" -> [{top, bottom}] (профиль динамики)
     let sysGi = 0;
 
     for (let p = 0; p < pages.length; p++) {
@@ -500,9 +524,8 @@ export function renderPrintPages(score) {
                 geom: geom, cfg: cfg, measures: measures,
                 effTs: effTs, tsStr: tsStr, effKeys: effKeys, bars: bars,
                 sysIndex: sysGi, registry: printObjs, staveReg: printStaves,
-                voltas: voltas, vpad: vpad, voltaMeasures: voltaMeasures,
-                tempoMarks: tempoMarks, tempoMeasures: tempoMeasures,
-                navMarks: navMarks, navMeasures: navMeasures,
+                beamReg: printBeams,
+                voltas: voltas, tempoMarks: tempoMarks, navMarks: navMarks,
                 topClearOf: topClearOf,
             });
             sysGi++;
@@ -515,7 +538,7 @@ export function renderPrintPages(score) {
     catch (err) { console.error('drawPrintTiesAndSlurs failed:', err); }
 
     // Динамические оттенки и вилки — отдельным проходом.
-    try { drawPrintDynamics(VF, score, printObjs, printStaves, effTs); }
+    try { drawPrintDynamics(VF, score, printObjs, printStaves, printBeams, effTs); }
     catch (err) { console.error('drawPrintDynamics failed:', err); }
 
     return pages.length;
@@ -523,7 +546,7 @@ export function renderPrintPages(score) {
 
 // Проход оттенков для печати — ТОТ ЖЕ алгоритм, что на экране (dynamicsBaseline):
 // одна базовая линия на (система+голос), под нотами, без столкновений.
-function drawPrintDynamics(VF, score, registry, staveReg, effTs) {
+function drawPrintDynamics(VF, score, registry, staveReg, beamReg, effTs) {
     const measures = score.measures || [];
     const voices = voiceListOf(score);
 
@@ -539,8 +562,13 @@ function drawPrintDynamics(VF, score, registry, staveReg, effTs) {
         } catch (e) { /* нет стана — пропуск */ }
     }
 
-    // --- 2. Низы bbox ВСЕХ нот группы (для согласованной базы) ---
+    // --- 2. Низы bbox ВСЕХ нот группы (для согласованной базы) и верхи
+    //         содержимого (для потолка treble-группы в аколаде) ---
     const bottoms = {};
+    const tops = {};
+    const seeTop = function (gk, y) {
+        if (tops[gk] == null || y < tops[gk]) tops[gk] = y;
+    };
     for (const id in registry) {
         const o = registry[id];
         if (!o || !o.sn) continue;
@@ -549,17 +577,53 @@ function drawPrintDynamics(VF, score, registry, staveReg, effTs) {
         try { bb = o.sn.getBoundingBox(); } catch (e) { continue; }
         if (!bb) continue;
         (bottoms[gk] || (bottoms[gk] = [])).push(bb.getY() + bb.getH());
+        seeTop(gk, bb.getY());
+    }
+    // Балки не входят в bbox нот — их низы обязаны попасть в профиль.
+    for (const bk in (beamReg || {})) {
+        const list = beamReg[bk];
+        for (let i = 0; i < list.length; i++) {
+            (bottoms[bk] || (bottoms[bk] = [])).push(list[i].bottom);
+            seeTop(bk, list[i].top);
+        }
+    }
+    // Модельные габариты: скобки туплетов и артикуляции НИЖЕ нот не входят в
+    // bbox VexFlow-ноты — базовая линия оттенков обязана пройти и под ними
+    // (иначе pp ложится на скобку «3»). Тот же модуль модели, что у экрана.
+    const CLEF_OF = { treble: 'treble', bass: 'bass', perc: 'percussion' };
+    for (let vi = 0; vi < voices.length; vi++) {
+        const v = voices[vi];
+        const ext = measureExtents(measures, v, CLEF_OF[v] || 'treble');
+        for (let mi = 0; mi < measures.length; mi++) {
+            const e = ext[mi];
+            if (!e || !(e.below > 0)) continue;
+            const sr = staveReg[mi + ':' + v];
+            if (!sr) continue;
+            let sb;
+            try { sb = sr.stave.getYForLine(4); } catch (e2) { continue; }
+            const gk = sr.sys + ':' + v;
+            (bottoms[gk] || (bottoms[gk] = [])).push(sb + e.below);
+        }
     }
 
-    // --- 3. Базовая линия группы (treble grand staff: потолок = верх bass) ---
+    // --- 3. Базовая линия группы. Потолок treble-группы аколады — верх
+    //         СОДЕРЖИМОГО bass (штили баса поднимаются выше его линейки). ---
     const baseline = {};
     for (const gk in staffBot) {
         const parts = gk.split(':');
-        const cap = (parts[1] === 'treble') ? staffTop[parts[0] + ':bass'] : null;
+        let cap = null;
+        if (parts[1] === 'treble') {
+            cap = staffTop[parts[0] + ':bass'];
+            const ct = tops[parts[0] + ':bass'];
+            if (ct != null && (cap == null || ct < cap)) cap = ct;
+        }
         baseline[gk] = dynamicsBaseline(staffBot[gk], bottoms[gk], cap);
     }
 
-    // --- 4. Отрисовка: глиф по центру ноты на базовой линии группы ---
+    // --- 4. Отрисовка: глиф по центру ноты на базовой линии группы.
+    //         Габариты глифов копятся по (sys:voice) — вилки обходят их по X
+    //         (издательское «p < f» без касаний). ---
+    const dynBoxes = {}; // "sys:voice" -> [{x0,x1}...]
     for (let mi = 0; mi < measures.length; mi++) {
         const dynAll = measures[mi] && measures[mi]._dyn;
         if (!dynAll) continue;
@@ -579,7 +643,9 @@ function drawPrintDynamics(VF, score, registry, staveReg, effTs) {
                 if (!obj || !obj.sn) continue;
                 let x;
                 try { x = obj.sn.getAbsoluteX(); } catch (e) { continue; }
-                drawDynamic(VF, sr.ctx, x, y, d.mark);
+                const box = drawDynamic(VF, sr.ctx, x, y, d.mark);
+                const bk = sr.sys + ':' + v;
+                (dynBoxes[bk] || (dynBoxes[bk] = [])).push(box);
             }
         }
     }
@@ -612,6 +678,7 @@ function drawPrintDynamics(VF, score, registry, staveReg, effTs) {
                 const y = baseline[sys + ':' + v];
                 return y == null ? null : y;
             },
+            obstaclesOf: function (sys, v) { return dynBoxes[sys + ':' + v] || null; },
             xAtBeat: function (mi, v, b) {
                 const notes = (measures[mi] && measures[mi][v]) || [];
                 const idx = indexAtBeat(noteOnsets(notes), b);

@@ -18,9 +18,12 @@ import { effectiveVoltas } from '../domain/voltas.js';
 import { readTempoMarks } from '../domain/tempo.js';
 import { noteOnsets, indexAtBeat } from '../domain/dynamics.js';
 import { setupBarline, drawCustomBarline, setupGrandBarline, drawGrandBarline } from './barlines.js';
-import { drawVoltasInBand, voltaHeadroom } from './voltas.js';
-import { drawTempos, tempoMarkHeadroom } from './tempo.js';
-import { drawNavigation, navigationMarkHeadroom, readNavigation } from './navigation.js';
+import { drawVoltasInBand } from './voltas.js';
+import { drawTempos } from './tempo.js';
+import { drawNavigation, readNavigation } from './navigation.js';
+import { solveTopBand } from './top_band.js';
+import { measureExtents, dynamicsPresence } from '../print/metrics.js';
+import { DYN_STAFF_GAP, DYN_NOTE_CLEAR, DYN_CAP_MARGIN } from './dynamics_layout.js';
 import { Playback } from '../playback/scheduler.js';
 
 function clearCanvas() {
@@ -47,6 +50,9 @@ export function render(score, forcedWidth) {
     state.noteHits = [];
     state.noteObjs = {};
     state.noteTransform = {};
+    // Габариты балок по голосам ({m, v, top, bottom}) — балки не входят в bbox
+    // нот, а профиль динамики обязан пройти и под ними.
+    state.beamBottoms = [];
     // Линейки стана каждого голоса по такту — для размещения оттенков ПОД
     // станом (нижняя) и потолка под grand staff (верхняя). Ключ "mi:voice".
     state.staffBottomY = {};
@@ -66,14 +72,6 @@ export function render(score, forcedWidth) {
     // не влезает; тогда оно равномерно по всем тактам строки.
     const margin = 8;
     const usableW = width - 2 * margin;
-    // Высота системы и расстояние между станами grand staff АДАПТИВНЫ: берём
-    // измеренные величины (см. computeDesiredSpacing в конце render) — раздвигаем
-    // станы под низкие ноты/длинные штили и динамику, чтобы не было наложений.
-    const sp = state.dynSpacing;
-    const rowH = isDrums
-        ? (sp && sp.rowHDrums) || 130
-        : (sp && sp.rowHGrand) || 200;
-    const bassDY = (sp && sp.bassDY) || 90;
     const INNER_PAD = 12; // правый запас (дыхание) в нотной зоне такта
     const voiceList = isDrums ? ['perc'] : ['treble', 'bass'];
     const clefList = isDrums ? ['percussion'] : ['treble', 'bass'];
@@ -110,45 +108,25 @@ export function render(score, forcedWidth) {
     const bars = effectiveRepeatBarlines(measures, effectiveBarlines(measures));
 
     // Вольты (первая/вторая концовка) — единое разрешение из domain/voltas,
-    // отрисовка общим со страничной печатью кодом (render/voltas). Скобки живут
-    // НАД верхним станом; когда вольты есть, каждая строка получает headroom
-    // (vpad) сверху, чтобы скобка не налезала на предыдущую систему/верх.
+    // отрисовка общим со страничной печатью кодом (render/voltas).
     const voltas = effectiveVoltas(measures);
-    const vpad = voltaHeadroom(voltas);
     // Темповые метки (♩ = N) — единое разрешение из domain/tempo, отрисовка общим
-    // со страничной печатью кодом (render/tempo). Живут НАД вольтами; такт со
-    // сменой темпа получает пофактовый headroom по длительности своей метки.
+    // со страничной печатью кодом (render/tempo).
     const tempoMarks = readTempoMarks(measures);
     // Навигация (Segno/Coda/D.C./D.S./…) — единое разрешение из render/navigation,
-    // отрисовка общим с печатью кодом. Стоит НАД темпом/вольтами (доп. резерв —
-    // пофактовый по символу такта: глиф Segno/Coda выше текста D.C./Fine).
+    // отрисовка общим с печатью кодом.
     const navMarks = readNavigation(measures);
-    // Пофактовое размещение верхних меток: символ поднимается над станом ТОЛЬКО
-    // на высоту тех слоёв, что РЕАЛЬНО стоят над ЭТИМ тактом (вольта/темп), а не
-    // глобально. Такты воль/темпа — для стекинга (иначе минимальный отступ).
-    const voltaMeasures = {};
-    for (let s = 0; s < voltas.length; s++) {
-        for (let mi = voltas[s].start; mi <= voltas[s].end; mi++) voltaMeasures[mi] = true;
-    }
-    const tempoMeasures = {}; // mi -> пофактовый резерв метки темпа
-    for (let t = 0; t < tempoMarks.length; t++) {
-        const m = tempoMarks[t];
-        const p = tempoMarkHeadroom(m);
-        if (!(tempoMeasures[m.measure] >= p)) tempoMeasures[m.measure] = p;
-    }
-    const navMeasures = {}; // mi -> пофактовый резерв символа навигации
-    for (let n = 0; n < navMarks.length; n++) {
-        navMeasures[navMarks[n].measure] = navigationMarkHeadroom(navMarks[n].id);
-    }
-    const MARK_GAP = 6; // минимальный зазор верхней метки над станом
-    // Верхний отступ, который РЕАЛЬНО нужен над КОНКРЕТНЫМ тактом: слои
-    // вольта→темп→навигация складываются на одном такте (см. baselineOf ниже).
-    // Такт без верхних меток даёт 0 — строка из таких тактов не резервирует зазор.
-    function stackPadOf(mi) {
-        return (voltaMeasures[mi] ? vpad : 0)
-             + (tempoMeasures[mi] || 0)
-             + (navMeasures[mi] || 0);
-    }
+    // Размещение верхних меток (вольты → темп → навигация) — ОБЩИЙ движок
+    // размещения (render/placement + render/top_band, тот же, что у печати):
+    // skyline-профиль вместо суммирования фиксированных «резервов слоёв».
+    // Метки над разными тактами не раздвигают друг друга; высокие ноты
+    // (добавочные линейки) приподнимают то, что реально стоит над ними.
+    // Модельные габариты нот над станом — как у печати (print/metrics).
+    const extTop = measureExtents(measures, voiceList[0], clefList[0]);
+    const aboveOf = function (mi) {
+        const e = extTop[mi];
+        return e ? e.above : 0;
+    };
 
     // Реальная ширина «головы» стана по ФАКТИЧЕСКИМ начальным модификаторам
     // (ключ [+ тональность с бекарами-отменой] [+ размер]), через getNoteStartX
@@ -204,36 +182,12 @@ export function render(score, forcedWidth) {
         layoutRows.push(items);
     }
     const rows = layoutRows.length;
-    // Верхний отступ КАЖДОЙ строки — пофактовый: резервируем ровно столько,
-    // сколько нужно самому высокому «столбику» верхних меток над каким-либо
-    // тактом ИМЕННО этой строки. Строки, над которыми ничего нет, не получают
-    // лишнего зазора (раньше глобальный vpad+tpad+npad раздвигал все системы).
-    const rowStaveTop = new Array(rows); // Y верхней линейки станов строки
-    let accY = margin;
-    for (let r = 0; r < rows; r++) {
-        const items = layoutRows[r];
-        let pad = 0;
-        for (let c = 0; c < items.length; c++) {
-            const p = stackPadOf(items[c]);
-            if (p > pad) pad = p;
-        }
-        rowStaveTop[r] = accY + pad;
-        accY += rowH + pad;
-    }
-    const totalH = accY + margin;
-    renderer.resize(width, totalH);
-
-    // геометрия каждого такта {row, x, w} — для playhead/скролла
+    // Геометрия каждого такта {row, x, w} (пропорциональное распределение
+    // ширины) считается ДО отрисовки: она нужна резервированию верхней полосы
+    // (skyline-движок размещения работает по реальным X-габаритам тактов).
     const geom = new Array(measures.length);
-    // Y верхней линейки верхнего стана каждой строки — якорь скобок вольт.
-    const rowTopY = new Array(rows);
-
-    // проход 3: распределение ширины по содержимому + отрисовка
     for (let r = 0; r < rows; r++) {
         const items = layoutRows[r];
-        // Стан начинается ниже на rowPad[r] — над ним место под вольты/темп/навигацию
-        // ЭТОЙ строки (0, если сверху ничего нет).
-        const yTop = rowStaveTop[r];
         let sumHead = 0, sumE = 0;
         const es = items.map(function (mi, col) {
             const e = cm[mi] + INNER_PAD;
@@ -249,15 +203,91 @@ export function render(score, forcedWidth) {
         const isLastRow = r === rows - 1;
         const extra = (!isLastRow && sumE < flexible) ? (flexible - sumE) : 0;
         let x = margin;
+        for (let col = 0; col < items.length; col++) {
+            const i = items[col];
+            const contentW = es[col] * ratio +
+                (sumE > 0 ? extra * (es[col] / sumE) : 0);
+            const w = leadOf(col, i) + contentW;
+            geom[i] = { row: r, x: x, w: w };
+            x += w;
+        }
+    }
+
+    // Верхний отступ КАЖДОЙ строки — решение ОБЩЕГО движка размещения
+    // (render/top_band): skyline по нотам (добавочные линейки приподнимают
+    // метки) + вольты + темп + навигация. До отрисовки якоря нот неизвестны —
+    // габариты меток КОНСЕРВАТИВНЫ (метка «занимает весь такт»); точное
+    // размещение при отрисовке гарантированно уложится в резерв (монотонность
+    // skyline). Из резерва вычитается воздух коробки стана над верхней
+    // линейкой (VexFlow рисует линейку 0 ниже верха коробки).
+    const staveTopAir = new VF.Stave(0, 0, 100).getYForLine(0)
+        + (isDrums ? 20 : 0);
+    const boxOfRow = function (r) {
+        return function (mi) {
+            const g = geom[mi];
+            return (g && g.row === r) ? { x: g.x, w: g.w } : null;
+        };
+    };
+    const bandSpec = function (r, staffTop, anchorXOf) {
+        const inRow = function (m) {
+            const g = geom[m.measure];
+            return g && g.row === r;
+        };
+        return {
+            VF: VF, ctx: ctx, staffTop: staffTop,
+            measures: layoutRows[r],
+            boxOf: boxOfRow(r),
+            aboveOf: aboveOf,
+            voltas: voltas,
+            tempoMarks: tempoMarks.filter(inRow),
+            navMarks: navMarks.filter(inRow),
+            anchorXOf: anchorXOf,
+        };
+    };
+    // Вертикальный профиль КАЖДОЙ строки (как print/vertical.systemProfile):
+    //   pad    — верхняя полоса (метки + выступ нот) НАД верхней линейкой;
+    //   bassDY — сдвиг bass-стана (grand), АДАПТИВНЫЙ по-строчно;
+    //   below  — содержимое строки НИЖЕ верхней линейки (станы + свесы +
+    //            динамика), измеренное предыдущим кадром (computeDesiredSpacing)
+    //            или дефолт до первого замера.
+    // Строки укладываются встык по РЕАЛЬНЫМ границам содержимого — резервы не
+    // суммируются с чужим «воздухом» и не крадут его (раньше 40px воздуха
+    // коробки стана учитывались и предыдущей строкой как низ, и следующей как
+    // верх — высокие ноты въезжали в динамику строки выше).
+    const spRows = (state.dynSpacing && state.dynSpacing.rows &&
+        state.dynSpacing.rows.length === rows) ? state.dynSpacing.rows : null;
+    const rowSpacing = function (r) {
+        if (spRows && spRows[r]) return spRows[r];
+        return isDrums ? { bassDY: 0, below: 70 } : { bassDY: 90, below: 160 };
+    };
+    const rowStaveTop = new Array(rows); // Y верха коробки станов строки
+    let accY = margin;
+    for (let r = 0; r < rows; r++) {
+        const need = solveTopBand(bandSpec(r, 0, null)).padTop;
+        const pad = Math.max(0, Math.ceil(need + 4));
+        const line0 = accY + pad;
+        rowStaveTop[r] = line0 - staveTopAir;
+        accY = line0 + rowSpacing(r).below;
+    }
+    const totalH = accY + margin;
+    renderer.resize(width, totalH);
+
+    // Y верхней линейки верхнего стана каждой строки — якорь верхних меток.
+    const rowTopY = new Array(rows);
+
+    // проход 3: отрисовка по готовой геометрии
+    for (let r = 0; r < rows; r++) {
+        const items = layoutRows[r];
+        // Стан начинается ниже на резерв строки — над ним место под
+        // вольты/темп/навигацию ЭТОЙ строки (0, если сверху ничего нет).
+        const yTop = rowStaveTop[r];
 
         for (let col = 0; col < items.length; col++) {
             const i = items[col];
             const m = measures[i];
             const rowStart = col === 0;
-            const contentW = es[col] * ratio +
-                (sumE > 0 ? extra * (es[col] / sumE) : 0);
-            const w = leadOf(col, i) + contentW;
-            geom[i] = { row: r, x: x, w: w };
+            const x = geom[i].x;
+            const w = geom[i].w;
 
             try {
                 if (isDrums) {
@@ -279,7 +309,7 @@ export function render(score, forcedWidth) {
                         effTs[i].beats, effTs[i].beatValue);
                 } else {
                     const treble = new VF.Stave(x, yTop, w);
-                    const bass = new VF.Stave(x, yTop + bassDY, w);
+                    const bass = new VF.Stave(x, yTop + rowSpacing(r).bassDY, w);
                     const keyName = keys[i];
                     const cancel = cancelOf(i);
                     if (rowStart) {
@@ -338,7 +368,6 @@ export function render(score, forcedWidth) {
             } catch (err) {
                 console.error('Render measure ' + i + ' failed:', err);
             }
-            x += w;
         }
     }
 
@@ -357,39 +386,44 @@ export function render(score, forcedWidth) {
     try { drawScreenDynamics(VF, ctx, score); }
     catch (err) { console.error('drawScreenDynamics failed:', err); }
 
-    // Вольты — отдельным проходом ПОСЛЕ станов (нужны geom тактов и Y верхних
-    // линеек строк). Каждая строка рисуется своей полосой; вольта, растянутая
-    // через перенос строки, ложится сегментом на каждую строку.
-    if (voltas.length) {
+    // Верхние метки (вольты → темп → навигация) — отдельным проходом ПОСЛЕ
+    // станов и нот: движок размещения получает РЕАЛЬНЫЕ якоря (X нот) и ставит
+    // каждую метку максимально низко без столкновений. Тот же движок, что и в
+    // резервировании выше, но с точными габаритами — размещение не выходит за
+    // зарезервированный отступ строки (монотонность skyline).
+    if (voltas.length || tempoMarks.length || navMarks.length) {
+        const primary = isDrums ? 'perc' : 'treble';
         for (let r = 0; r < rows; r++) {
             if (rowTopY[r] == null) continue;
-            const inRow = {};
-            for (let c = 0; c < layoutRows[r].length; c++) {
-                const mi = layoutRows[r][c];
-                if (geom[mi]) inRow[mi] = { x: geom[mi].x, w: geom[mi].w };
+            const spec = bandSpec(r, rowTopY[r], function (m) {
+                return tempoXAtBeat(m.measure, primary, m.beat || 0);
+            });
+            const band = solveTopBand(spec);
+            if (voltas.length) {
+                drawVoltasInBand(ctx, voltas, spec.boxOf, rowTopY[r],
+                    band.voltaYOf);
             }
-            drawVoltasInBand(ctx, voltas,
-                function (mi) { return inRow[mi] || null; }, rowTopY[r]);
+            if (spec.tempoMarks.length) {
+                drawTempos({
+                    VF: VF,
+                    marks: spec.tempoMarks,
+                    rowOf: function (mi) { return geom[mi] ? geom[mi].row : null; },
+                    yOf: function (m, i) { return band.tempoYOf(i); },
+                    ctxOf: function () { return ctx; },
+                    xOf: function (mi, beat) { return tempoXAtBeat(mi, primary, beat); },
+                });
+            }
+            if (spec.navMarks.length) {
+                drawNavigation({
+                    VF: VF,
+                    marks: spec.navMarks,
+                    rowOf: function (mi) { return geom[mi] ? geom[mi].row : null; },
+                    yOf: function (m, i) { return band.navYOf(i); },
+                    boxOf: spec.boxOf,
+                    ctxOf: function () { return ctx; },
+                });
+            }
         }
-    }
-
-    // Темповые метки — отдельным проходом ПОСЛЕ станов (нужны geom тактов, X нот
-    // и Y верхних линеек). Метка стоит НАД вольтами (rowTopY - vpad - зазор).
-    // X доли берём из позиции ноты (state.noteHitIndex), общий слой render/tempo.
-    if (tempoMarks.length) {
-        const primary = isDrums ? 'perc' : 'treble';
-        drawTempos({
-            VF: VF,
-            marks: tempoMarks,
-            rowOf: function (mi) { return geom[mi] ? geom[mi].row : null; },
-            baselineOf: function (r, mi) {
-                if (rowTopY[r] == null) return null;
-                // Над темпом поднимаемся, только если на ЭТОМ такте есть вольта.
-                return rowTopY[r] - (voltaMeasures[mi] ? vpad : 0) - MARK_GAP;
-            },
-            ctxOf: function () { return ctx; },
-            xOf: function (mi, beat) { return tempoXAtBeat(mi, primary, beat); },
-        });
     }
 
     function tempoXAtBeat(mi, voice, beat) {
@@ -404,35 +438,21 @@ export function render(score, forcedWidth) {
         return g.x + 2; // fallback — левый край такта
     }
 
-    // Навигация — отдельным проходом НАД темпом/вольтами (rowTopY - vpad - tpad).
-    if (navMarks.length) {
-        drawNavigation({
-            VF: VF,
-            marks: navMarks,
-            rowOf: function (mi) { return geom[mi] ? geom[mi].row : null; },
-            baselineOf: function (r, mi) {
-                if (rowTopY[r] == null) return null;
-                // Навигация — над вольтой И над темпом ЭТОГО такта, если они есть.
-                return rowTopY[r]
-                    - (voltaMeasures[mi] ? vpad : 0)
-                    - (tempoMeasures[mi] || 0) - MARK_GAP;
-            },
-            boxOf: function (mi) { return geom[mi] ? { x: geom[mi].x, w: geom[mi].w } : null; },
-            ctxOf: function () { return ctx; },
-        });
-    }
-
     // Подсветка выделения при наборе лиги фразировки (slur).
     drawSelectionHighlight(score.selection);
 
     // геометрия раскладки — нужна плееру и автоскроллу.
     // geom[i] = {row, x, w}: число тактов в строке переменное, поэтому
     // строку/координаты такта берём отсюда, а не из фиксированного perRow.
-    // Строки теперь РАЗНОЙ высоты (пофактовый верхний отступ), поэтому верх стана
-    // каждой строки нельзя вычислить как margin + row*rowH — отдаём готовый массив
-    // rowTops (Y верхней линейки станов строки). rowH — базовая высота стана (без
-    // верхнего отступа) для высоты playhead. Плеер/скролл берут Y строки из rowTops.
-    state.lastLayout = { width: width, totalH: totalH, rowH: rowH, rows: rows,
+    // Строки РАЗНОЙ высоты (пофактовый верхний отступ и по-строчный вертикальный
+    // профиль) — отдаём готовый массив rowTops (Y верха коробки станов строки).
+    // rowH — репрезентативная высота строки (для playhead/центрирования).
+    let rowHMax = isDrums ? 130 : 200;
+    for (let r = 0; r < rows; r++) {
+        const h = staveTopAir + rowSpacing(r).below;
+        if (h > rowHMax) rowHMax = h;
+    }
+    state.lastLayout = { width: width, totalH: totalH, rowH: rowHMax, rows: rows,
                    geom: geom, margin: margin, rowTops: rowStaveTop };
 
     // если идёт воспроизведение — пересобрать события под новую раскладку
@@ -457,9 +477,7 @@ export function render(score, forcedWidth) {
         const desired = computeDesiredSpacing(score, isDrums);
         const cur = state.dynSpacing;
         const changed = !cur ||
-            cur.bassDY !== desired.bassDY ||
-            cur.rowHGrand !== desired.rowHGrand ||
-            cur.rowHDrums !== desired.rowHDrums;
+            JSON.stringify(cur.rows) !== JSON.stringify(desired.rows);
         if (changed) {
             state.dynSpacing = desired;
             scheduleRerender();
@@ -481,60 +499,108 @@ function scheduleRerender() {
     });
 }
 
-// Нужные отступы системы из РЕАЛЬНЫХ высот нот и наличия оттенков. Меряем,
-// насколько содержимое выходит за линейки стана (вниз у верхнего голоса/перка,
-// вверх и вниз у баса) — это инвариантно вертикальному сдвигу, поэтому величины
-// стабильны и проход сходится. Возвращает { bassDY, rowHGrand, rowHDrums }.
+// Нужные отступы КАЖДОЙ строки из РЕАЛЬНЫХ высот содержимого (bbox нот и балок
+// относительно линеек стана — величины НЕ зависят от вертикального сдвига,
+// поэтому проход сходится) + модельных габаритов (туплеты/артикуляции ниже нот
+// не входят в bbox) + наличия оттенков/вилок. Зеркало print/vertical
+// systemProfile: у каждой строки СВОЙ профиль. Возвращает { rows: [{bassDY,
+// below}] }, below — содержимое строки ниже её верхней линейки.
 function computeDesiredSpacing(score, isDrums) {
-    let trebleBelow = 0, bassAbove = 0, bassBelow = 0, percBelow = 0;
+    const geom = (state.lastLayout && state.lastLayout.geom) || [];
+    let rows = 0;
+    for (let i = 0; i < geom.length; i++) {
+        if (geom[i] && geom[i].row + 1 > rows) rows = geom[i].row + 1;
+    }
+    if (rows === 0) return { rows: [] };
+    const rowOf = function (mi) { return geom[mi] ? geom[mi].row : 0; };
+    const zeros = function () { return new Array(rows).fill(0); };
+    const falses = function () { return new Array(rows).fill(false); };
+    const bump = function (arr, r, v) { if (v > arr[r]) arr[r] = v; };
+
+    const trebleBelow = zeros(), bassAbove = zeros(), bassBelow = zeros(),
+        percBelow = zeros();
+    const seeBelow = function (v, r, val) {
+        if (v === 'treble') bump(trebleBelow, r, val);
+        else if (v === 'bass') bump(bassBelow, r, val);
+        else if (v === 'perc') bump(percBelow, r, val);
+    };
     const hits = state.noteHits || [];
     for (let i = 0; i < hits.length; i++) {
         const h = hits[i];
+        const r = rowOf(h.m);
         const sb = state.staffBottomY[h.m + ':' + h.v];
         const st = state.staffTopY[h.m + ':' + h.v];
-        const bottom = h.y + h.h, top = h.y;
-        if (h.v === 'treble') {
-            if (sb != null && bottom - sb > trebleBelow) trebleBelow = bottom - sb;
-        } else if (h.v === 'bass') {
-            if (st != null && st - top > bassAbove) bassAbove = st - top;
-            if (sb != null && bottom - sb > bassBelow) bassBelow = bottom - sb;
-        } else if (h.v === 'perc') {
-            if (sb != null && bottom - sb > percBelow) percBelow = bottom - sb;
+        if (sb != null) seeBelow(h.v, r, h.y + h.h - sb);
+        if (h.v === 'bass' && st != null) bump(bassAbove, r, st - h.y);
+    }
+    // Балки не входят в bbox нот — меряем их отдельно.
+    const beams = state.beamBottoms || [];
+    for (let i = 0; i < beams.length; i++) {
+        const b = beams[i];
+        const r = rowOf(b.m);
+        const sb = state.staffBottomY[b.m + ':' + b.v];
+        const st = state.staffTopY[b.m + ':' + b.v];
+        if (sb != null) seeBelow(b.v, r, b.bottom - sb);
+        if (b.v === 'bass' && st != null) bump(bassAbove, r, st - b.top);
+    }
+    // Модельные габариты (общие с печатью): туплеты/артикуляции/акциденталии.
+    const msAll = (score && score.measures) || [];
+    const mergeModel = function (voice, clef, belowArr, aboveArr) {
+        const ext = measureExtents(msAll, voice, clef);
+        for (let mi = 0; mi < ext.length; mi++) {
+            const r = rowOf(mi);
+            bump(belowArr, r, ext[mi].below);
+            if (aboveArr) bump(aboveArr, r, ext[mi].above);
         }
+    };
+    if (isDrums) {
+        mergeModel('perc', 'percussion', percBelow, null);
+    } else {
+        mergeModel('treble', 'treble', trebleBelow, null);
+        mergeModel('bass', 'bass', bassBelow, bassAbove);
     }
-    if (trebleBelow < 0) trebleBelow = 0;
-    if (bassAbove < 0) bassAbove = 0;
-    if (bassBelow < 0) bassBelow = 0;
-    if (percBelow < 0) percBelow = 0;
 
-    // Наличие оттенков по голосам (резервируем место под глиф).
-    let tDyn = false, bDyn = false, pDyn = false;
-    const ms = (score && score.measures) || [];
-    for (let i = 0; i < ms.length; i++) {
-        const d = ms[i] && ms[i]._dyn;
-        if (!d) continue;
-        if (d.treble && d.treble.length) tDyn = true;
-        if (d.bass && d.bass.length) bDyn = true;
-        if (d.perc && d.perc.length) pDyn = true;
-    }
-    // Сдвиг базовой линии оттенка от нижней линейки стана (как в dynamics_layout:
-    // max(STAFF_GAP, ниже самой низкой ноты + NOTE_CLEAR)).
+    // Наличие оттенков/вилок ПО СТРОКАМ и голосам (вилка резервирует место в
+    // каждом такте диапазона) — общий домен-резолвер печати.
+    const tDyn = falses(), bDyn = falses(), pDyn = falses();
+    const mark = function (voice, arr) {
+        const has = dynamicsPresence(msAll, voice);
+        for (let mi = 0; mi < has.length; mi++) {
+            if (has[mi]) arr[rowOf(mi)] = true;
+        }
+    };
+    if (isDrums) mark('perc', pDyn);
+    else { mark('treble', tDyn); mark('bass', bDyn); }
+
+    // Сдвиг базовой линии оттенка от нижней линейки стана — ТЕ ЖЕ константы,
+    // что в dynamics_layout (единый источник чисел).
     const dynOffset = function (below, has) {
-        return has ? Math.max(16, below + 11) : below;
+        return has ? Math.max(DYN_STAFF_GAP, below + DYN_NOTE_CLEAR) : below;
     };
 
-    if (isDrums) {
-        const rowHDrums = Math.round(Math.max(130,
-            60 + dynOffset(percBelow, pDyn) + 50));
-        return { bassDY: 90, rowHGrand: 200, rowHDrums: rowHDrums };
+    const out = [];
+    for (let r = 0; r < rows; r++) {
+        if (isDrums) {
+            out.push({
+                bassDY: 0,
+                below: Math.round(Math.max(70,
+                    40 + dynOffset(percBelow[r], pDyn[r]) + 10)),
+            });
+            continue;
+        }
+        // bassDY: между нижней линейкой treble и верхней линейкой bass должно
+        // помещаться treble-снизу (или оттенок treble + спуск глифа/вилки под
+        // базовую линию — DYN_CAP_MARGIN) + bass-сверху + зазор.
+        const bassDY = Math.round(Math.max(90,
+            40 + dynOffset(trebleBelow[r], tDyn[r]) + bassAbove[r]
+            + (tDyn[r] ? DYN_CAP_MARGIN + 4 : 6)));
+        out.push({
+            bassDY: bassDY,
+            below: Math.round(Math.max(160,
+                bassDY + 40 + dynOffset(bassBelow[r], bDyn[r]) + 24)),
+        });
     }
-    // bassDY: между нижней линейкой treble и верхней линейкой bass должно
-    // помещаться treble-снизу (или оттенок treble) + bass-сверху + зазор.
-    const bassDY = Math.round(Math.max(90,
-        40 + dynOffset(trebleBelow, tDyn) + bassAbove + (tDyn ? 10 : 6)));
-    const rowHGrand = Math.round(Math.max(200,
-        bassDY + 40 + dynOffset(bassBelow, bDyn) + 24));
-    return { bassDY: bassDY, rowHGrand: rowHGrand, rowHDrums: 130 };
+    return { rows: out };
 }
 
 function formatAndDraw(VF, ctx, voices, staves, measureW, rowStart, beats, beatValue) {
@@ -586,7 +652,22 @@ function formatAndDraw(VF, ctx, voices, staves, measureW, rowStart, beats, beatV
             maintain_stem_directions: true,
         });
         v.draw(ctx, staves[idx]);
-        beams.forEach((b) => b.setContext(ctx).draw());
+        beams.forEach((b) => {
+            b.setContext(ctx).draw();
+            // Габарит балки — в профиль динамики (см. drawScreenDynamics).
+            const n0 = b.getNotes && b.getNotes()[0];
+            if (n0 && n0.__hit) {
+                try {
+                    const bb = b.getBoundingBox();
+                    if (bb) {
+                        state.beamBottoms.push({
+                            m: n0.__hit.m, v: n0.__hit.v,
+                            top: bb.getY(), bottom: bb.getY() + bb.getH(),
+                        });
+                    }
+                } catch (e) { /* нет bbox — пропуск */ }
+            }
+        });
 
         // координаты нот для тап-навигации (с учётом горизонтального сжатия)
         v.getTickables().forEach((t) => {
@@ -616,10 +697,14 @@ function formatAndDraw(VF, ctx, voices, staves, measureW, rowStart, beats, beatV
     });
 
     // Числа/скобки tuplet — после нот и балок, в ТОМ ЖЕ контексте сжатия
-    // (внутри grp при sx<1), чтобы совпадать со сжатыми нотами.
+    // (внутри grp при sx<1), чтобы совпадать со сжатыми нотами. Группа
+    // sf-tuplet — инспектируемость/аудит.
     tuplets.forEach((t) => {
-        try { t.setContext(ctx).draw(); }
-        catch (e) { console.error('tuplet draw failed:', e); }
+        try {
+            if (ctx.openGroup) ctx.openGroup('sf-tuplet');
+            try { t.setContext(ctx).draw(); }
+            finally { if (ctx.openGroup) ctx.closeGroup(); }
+        } catch (e) { console.error('tuplet draw failed:', e); }
     });
 
     if (grp) {

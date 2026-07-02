@@ -169,7 +169,7 @@ test('vertical: система без выступов получает мини
         grand: true, items: [0],
         extTop: ext, extBottom: ext,
         dynTop: [false], dynBottom: [false],
-        stackOf: () => 0,
+        topReserve: 0,
     });
     assert.ok(pro.gapTB >= 52); // минимум аколады
     assert.equal(pro.height, pro.padTop + pro.bassDY + 40 + pro.padBottom);
@@ -181,31 +181,34 @@ test('vertical: динамика между станами раздвигает 
         grand: true, items: [0],
         extTop: ext, extBottom: [{ above: 30, below: 0 }],
         dynTop: [false], dynBottom: [false],
-        stackOf: () => 0,
+        topReserve: 0,
     });
     const withDyn = systemProfile({
         grand: true, items: [0],
         extTop: ext, extBottom: [{ above: 30, below: 0 }],
         dynTop: [true], dynBottom: [false],
-        stackOf: () => 0,
+        topReserve: 0,
     });
     assert.ok(withDyn.gapTB > flat.gapTB,
         `dyn=${withDyn.gapTB} flat=${flat.gapTB}`);
 });
 
-test('vertical: верхние метки над высокой нотой поднимают padTop', () => {
+test('vertical: резерв верхней полосы (движок размещения) входит в padTop', () => {
+    // topReserve — готовое решение skyline-движка (render/top_band): выступ
+    // нот + вольты/темп/навигация; метки над высокой нотой дают больший резерв.
     const base = systemProfile({
         grand: false, items: [0],
         extTop: [{ above: 0, below: 0 }],
         dynTop: [false],
-        stackOf: () => 40, // напр. вольта+темп
+        topReserve: 40, // напр. вольта+темп над станом без выступов
     });
     const tall = systemProfile({
         grand: false, items: [0],
-        extTop: [{ above: 35, below: 0 }],
+        extTop: [{ above: 0, below: 0 }],
         dynTop: [false],
-        stackOf: () => 40,
+        topReserve: 75, // те же метки, но skyline поднял их над высокой нотой
     });
+    assert.ok(base.padTop >= 40, `base=${base.padTop}`);
     assert.ok(tall.padTop >= base.padTop + 35,
         `tall=${tall.padTop} base=${base.padTop}`);
 });

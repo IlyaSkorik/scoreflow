@@ -8,6 +8,8 @@
 // "To Coda", "D.S." …), как в MuseScore/Dorico/Finale. Решение «что где» и
 // разворот playback живут в domain/navigation — здесь только геометрия.
 
+import { glyphExtents } from './measure.js';
+
 const COLOR = '#000000';
 const GLYPH_SIZE = 26;  // кегль глифа segno/coda
 const FONT = 13;        // кегль текста навигации
@@ -26,30 +28,42 @@ const NAV_TEXT = {
 // SMuFL-глиф для символов-якорей.
 const NAV_GLYPH = { segno: 'segno', coda: 'coda' };
 
-// Вертикальное место (px), которое ОДИН навигационный символ резервирует НАД
-// станом (символы стоят выше темпа/вольт) — ПОФАКТОВОЕ: глиф Segno/Coda рисуется
-// ВВЕРХ от базовой линии на ~GLYPH_SIZE, текст (D.C./D.S./Fine/To Coda) — только
-// на кегль FONT. Зазор (8) покрывает подъём MARK_GAP, на который render.js/
-// print.js ставят базовую линию над нижележащим слоем (вольта/темп), плюс запас.
-export function navigationMarkHeadroom(id) {
-    return (NAV_GLYPH[id] ? GLYPH_SIZE : FONT) + 8;
-}
-
-// Общий резерв по списку меток — максимум пофактовых. 0 — навигации нет.
-export function navigationHeadroom(marks) {
-    let h = 0;
-    for (let i = 0; i < (marks || []).length; i++) {
-        const m = navigationMarkHeadroom(marks[i].id);
-        if (m > h) h = m;
-    }
-    return h;
-}
-
 // Выравнивание символа по такту: D.C./D.S./Fine/To Coda — над ПРАВЫМ краем
 // такта (конец такта — точка перехода/остановки), Segno/Coda — над ЛЕВЫМ краем
 // (начало секции). Возвращает 'right' | 'left'.
 function navAlign(id) {
     return NAV_GLYPH[id] ? 'left' : 'right';
+}
+
+// РЕАЛЬНЫЙ габарит символа навигации для движка размещения (placement):
+//   width — ширина глифа/текста, rise/drop — вертикаль вокруг базовой линии,
+//   align — 'left' | 'right' (какой край такта — якорь).
+// Глифы Segno/Coda меряются пробной отрисовкой (glyphExtents): реальные глифы
+// СВИСАЮТ ниже базовой линии — константа кегля этого не знала, и глиф ложился
+// на линию вольты. Текст меряется через ctx.measureText.
+export function navigationMarkExtents(VF, ctx, id) {
+    const glyph = NAV_GLYPH[id];
+    if (glyph && VF && VF.Glyph) {
+        try {
+            const e = glyphExtents(VF, glyph, GLYPH_SIZE);
+            return {
+                width: e.x1 - Math.min(0, e.x0),
+                rise: e.rise, drop: e.drop, align: 'left',
+            };
+        } catch (e) { /* текстовая оценка ниже */ }
+    }
+    const text = NAV_TEXT[id] || id;
+    let w = text.length * FONT * 0.5;
+    if (ctx && ctx.measureText) {
+        try {
+            ctx.save();
+            ctx.setFont('serif', FONT, 'italic');
+            const m = ctx.measureText(text);
+            if (m && m.width > 0) w = m.width;
+            ctx.restore();
+        } catch (e) { /* оценка выше */ }
+    }
+    return { width: w, rise: FONT, drop: FONT * 0.25, align: navAlign(id) };
 }
 
 // Нарисовать один навигационный символ по базовой линии [y] (низ символа).
@@ -84,22 +98,30 @@ export function drawNavigationMark(VF, ctx, id, xLeft, xRight, y) {
 // Отрисовать все навигационные символы. [spec] — аксессоры пайплайна:
 //   VF, marks : [{ measure, id }]
 //   rowOf(mi)          : строка/система такта (или null)
-//   baselineOf(row,mi) : Y базовой линии символа (пофактовое; или null)
+//   yOf(mark, i)       : Y базовой линии от движка размещения (или null)
+//   baselineOf(row,mi) : легаси-фолбэк, если yOf не задан
 //   boxOf(mi)          : { x, w } такта (левый край и ширина) или null
 //   ctxOf(row)         : графический контекст строки/системы
+// Каждый символ рисуется в SVG-группе класса sf-nav (инспектируемость/аудит).
 export function drawNavigation(spec) {
     const marks = spec.marks || [];
     for (let i = 0; i < marks.length; i++) {
         const m = marks[i];
         const r = spec.rowOf(m.measure);
         if (r == null) continue;
-        const y = spec.baselineOf(r, m.measure);
+        const y = spec.yOf ? spec.yOf(m, i) : spec.baselineOf(r, m.measure);
         if (y == null) continue;
         const box = spec.boxOf(m.measure);
         if (!box) continue;
         const ctx = spec.ctxOf(r);
         if (!ctx) continue;
-        drawNavigationMark(spec.VF, ctx, m.id, box.x, box.x + box.w, y);
+        const grouped = !!ctx.openGroup;
+        if (grouped) ctx.openGroup('sf-nav');
+        try {
+            drawNavigationMark(spec.VF, ctx, m.id, box.x, box.x + box.w, y);
+        } finally {
+            if (grouped) ctx.closeGroup();
+        }
     }
 }
 
