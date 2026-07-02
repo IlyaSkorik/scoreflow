@@ -11,9 +11,9 @@ void main() {
       home: Scaffold(
         body: Row(
           children: [
-            for (final d in durations.keys) NoteIcon(duration: d, size: 36),
-            const NoteIcon(duration: 'q', dots: 1, size: 36),
-            const NoteIcon(duration: 'h', dots: 2, size: 36),
+            for (final d in durations.keys) NoteIcon(duration: d, size: 23),
+            const NoteIcon(duration: 'q', dots: 1, size: 23),
+            const NoteIcon(duration: 'h', dots: 2, size: 23),
           ],
         ),
       ),
@@ -21,13 +21,21 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     expect(find.byType(NoteIcon), findsNWidgets(durations.length + 2));
-    // Единая система координат: у всех глифов одинаковый бокс — ряд палитры
-    // выравнивается сам, головки на одном уровне.
-    final sizes = tester
-        .widgetList(find.byType(NoteIcon))
-        .map((w) => tester.getSize(find.byWidget(w)))
-        .toSet();
-    expect(sizes.length, 1);
+    // Бокс — тесный по чернилам (Center честно центрирует): целая ниже
+    // четвертной (нет штиля), восьмая шире (флажок), 64-я выше восьмой
+    // (стопка флажков), точка расширяет бокс.
+    Size sizeOf(String d, [int dots = 0]) {
+      final w = tester
+          .widgetList<NoteIcon>(find.byType(NoteIcon))
+          .firstWhere((n) => n.duration == d && n.dots == dots);
+      return tester.getSize(find.byWidget(w));
+    }
+
+    expect(sizeOf('q').height, 23);
+    expect(sizeOf('w').height, lessThan(sizeOf('q').height));
+    expect(sizeOf('8').width, greaterThan(sizeOf('q').width));
+    expect(sizeOf('64').height, greaterThan(sizeOf('8').height));
+    expect(sizeOf('q', 1).width, greaterThan(sizeOf('q').width));
   });
 
   test('palette keeps every engine duration with a human name', () {

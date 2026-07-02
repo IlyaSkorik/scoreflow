@@ -1462,17 +1462,26 @@ class _EditorScreenState extends State<EditorScreen> {
                 onSelected: (_) => onTap(),
               );
 
-          // Группа: заголовок + перенос-строка чипов.
-          Widget group(String title, List<Widget> chips) => Padding(
+          // Группа: заголовок [+ суффикс-виджет, напр. гравированная нота
+          // у темпа] + перенос-строка чипов.
+          Widget group(String title, List<Widget> chips,
+                  {Widget? titleSuffix}) =>
+              Padding(
             padding: const EdgeInsets.fromLTRB(8, 10, 8, 0),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  title,
-                  style: Theme.of(ctx).textTheme.labelLarge?.copyWith(
-                    color: Theme.of(ctx).colorScheme.onSurfaceVariant,
-                  ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      title,
+                      style: Theme.of(ctx).textTheme.labelLarge?.copyWith(
+                        color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    if (titleSuffix != null) titleSuffix,
+                  ],
                 ),
                 const SizedBox(height: 6),
                 Wrap(spacing: 6, runSpacing: 4, children: chips),
@@ -1603,9 +1612,27 @@ class _EditorScreenState extends State<EditorScreen> {
                         }),
                     ]),
 
-                    // Смена темпа (♩=) на позиции курсора. «Нет» — только не в
-                    // начале (начальный темп снять нельзя, он живёт в слайдере).
-                    group('Темп ♩=', [
+                    // Смена темпа «(нота) = N» на позиции курсора. «Нет» —
+                    // только не в начале (начальный темп снять нельзя, он
+                    // живёт в слайдере). Нота в заголовке — гравированная.
+                    group('Темп ', titleSuffix: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Transform.translate(
+                          offset: const Offset(0, -1),
+                          child: TempoNoteIcon(
+                            size: 14,
+                            color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        Text(
+                          ' =',
+                          style: Theme.of(ctx).textTheme.labelLarge?.copyWith(
+                            color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ), [
                       if (!atStart)
                         chip('Нет', curTempo == null, () {
                           _setTempoMark(null);
@@ -2123,7 +2150,7 @@ class _EditorPanelState extends State<_EditorPanel> {
               child: NoteIcon(
                 duration: duration,
                 dots: dots,
-                size: 36,
+                size: 23,
                 color: selected
                     ? scheme.onSecondaryContainer
                     : scheme.onSurfaceVariant,
