@@ -20,7 +20,7 @@ import { noteOnsets, indexAtBeat } from '../domain/dynamics.js';
 import { setupBarline, drawCustomBarline, setupGrandBarline, drawGrandBarline } from './barlines.js';
 import { drawVoltasInBand, voltaHeadroom } from './voltas.js';
 import { drawTempos, tempoHeadroom } from './tempo.js';
-import { drawNavigation, navigationHeadroom, readNavigation } from './navigation.js';
+import { drawNavigation, navigationMarkHeadroom, readNavigation } from './navigation.js';
 import { Playback } from '../playback/scheduler.js';
 
 function clearCanvas() {
@@ -121,9 +121,9 @@ export function render(score, forcedWidth) {
     const tempoMarks = readTempoMarks(measures);
     const tpad = tempoHeadroom(tempoMarks);
     // Навигация (Segno/Coda/D.C./D.S./…) — единое разрешение из render/navigation,
-    // отрисовка общим с печатью кодом. Стоит НАД темпом/вольтами (доп. npad).
+    // отрисовка общим с печатью кодом. Стоит НАД темпом/вольтами (доп. резерв —
+    // пофактовый по символу такта: глиф Segno/Coda выше текста D.C./Fine).
     const navMarks = readNavigation(measures);
-    const npad = navigationHeadroom(navMarks);
     // Пофактовое размещение верхних меток: символ поднимается над станом ТОЛЬКО
     // на высоту тех слоёв, что РЕАЛЬНО стоят над ЭТИМ тактом (вольта/темп), а не
     // глобально. Такты воль/темпа — для стекинга (иначе минимальный отступ).
@@ -133,16 +133,18 @@ export function render(score, forcedWidth) {
     }
     const tempoMeasures = {};
     for (let t = 0; t < tempoMarks.length; t++) tempoMeasures[tempoMarks[t].measure] = true;
-    const navMeasures = {};
-    for (let n = 0; n < navMarks.length; n++) navMeasures[navMarks[n].measure] = true;
-    const MARK_GAP = 8; // минимальный зазор верхней метки над станом
+    const navMeasures = {}; // mi -> пофактовый резерв символа навигации
+    for (let n = 0; n < navMarks.length; n++) {
+        navMeasures[navMarks[n].measure] = navigationMarkHeadroom(navMarks[n].id);
+    }
+    const MARK_GAP = 6; // минимальный зазор верхней метки над станом
     // Верхний отступ, который РЕАЛЬНО нужен над КОНКРЕТНЫМ тактом: слои
     // вольта→темп→навигация складываются на одном такте (см. baselineOf ниже).
     // Такт без верхних меток даёт 0 — строка из таких тактов не резервирует зазор.
     function stackPadOf(mi) {
         return (voltaMeasures[mi] ? vpad : 0)
              + (tempoMeasures[mi] ? tpad : 0)
-             + (navMeasures[mi] ? npad : 0);
+             + (navMeasures[mi] || 0);
     }
 
     // Реальная ширина «головы» стана по ФАКТИЧЕСКИМ начальным модификаторам
