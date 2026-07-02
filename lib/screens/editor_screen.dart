@@ -12,6 +12,7 @@ import '../models/palette.dart';
 import '../models/reflow.dart';
 import '../models/score.dart';
 import '../widgets/metronome_icon.dart';
+import '../widgets/tempo_note_icon.dart';
 
 /// Тональности для пикера в листе «Ещё» (формат VexFlow keySignature).
 const List<String> _keySignatures = [
@@ -2845,10 +2846,22 @@ class _PlaybackBar extends StatelessWidget {
           // Темп — компактный чип-читалка ДЕЙСТВУЮЩЕГО темпа партитуры. Во время
           // игры показывает темп под плейхедом (tempoLive, подсвечен), иначе —
           // начальный темп пьесы. Тап открывает лист «Ещё» (ползунок начального
-          // темпа). Символ ♩ сам обозначает темп — иконка-аватар не нужна.
+          // темпа). Нота — гравированная (TempoNoteIcon), как метка в нотах;
+          // головка сидит на базовой линии цифр, штиль уходит выше текста.
           ActionChip(
             visualDensity: VisualDensity.compact,
-            label: Text('♩=$tempo'),
+            label: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Сдвиг вне layout (у CustomPaint нет baseline): при центровке
+                // строки низ головки садится на базовую линию цифр.
+                Transform.translate(
+                  offset: const Offset(0, -2),
+                  child: const TempoNoteIcon(size: 18),
+                ),
+                Text(' = $tempo'),
+              ],
+            ),
             backgroundColor: tempoLive
                 ? Theme.of(context).colorScheme.primaryContainer
                 : null,
