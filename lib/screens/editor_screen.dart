@@ -12,6 +12,7 @@ import '../models/palette.dart';
 import '../models/reflow.dart';
 import '../models/score.dart';
 import '../widgets/metronome_icon.dart';
+import '../widgets/note_icon.dart';
 import '../widgets/tempo_note_icon.dart';
 
 /// Тональности для пикера в листе «Ещё» (формат VexFlow keySignature).
@@ -2072,19 +2073,23 @@ class _EditorPanelState extends State<_EditorPanel> {
   // --- Зона 1: длительности ---------------------------------------------
   // Равные сегменты во всю ширину (без горизонтального скролла) + тумблер
   // точки. Самое частое действие — крупные равные цели, всё видно сразу.
+  // Глифы — гравированные (NoteIcon): головки всех сегментов на одном
+  // уровне, ряд читается как нотная строка.
   Widget _durationRow(BuildContext context) {
     return Row(
       children: [
         for (final e in durations.entries)
           _durSeg(
             context,
-            label: e.value,
+            duration: e.key,
             selected: widget.duration == e.key,
+            tooltip: e.value,
             onTap: () => widget.onDuration(e.key),
           ),
         _durSeg(
           context,
-          label: '♩.',
+          duration: 'q',
+          dots: 1,
           selected: widget.dots > 0,
           tooltip: 'Нота с точкой',
           onTap: () => widget.onDots(widget.dots > 0 ? 0 : 1),
@@ -2095,7 +2100,8 @@ class _EditorPanelState extends State<_EditorPanel> {
 
   Widget _durSeg(
     BuildContext context, {
-    required String label,
+    required String duration,
+    int dots = 0,
     required bool selected,
     required VoidCallback onTap,
     String? tooltip,
@@ -2114,17 +2120,13 @@ class _EditorPanelState extends State<_EditorPanel> {
           child: SizedBox(
             height: 46,
             child: Center(
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 22,
-                    color: selected
-                        ? scheme.onSecondaryContainer
-                        : scheme.onSurfaceVariant,
-                  ),
-                ),
+              child: NoteIcon(
+                duration: duration,
+                dots: dots,
+                size: 36,
+                color: selected
+                    ? scheme.onSecondaryContainer
+                    : scheme.onSurfaceVariant,
               ),
             ),
           ),
