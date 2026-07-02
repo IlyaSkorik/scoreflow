@@ -297,8 +297,109 @@ function longSuite() {
     };
 }
 
+// ============================ STRESS (все слои разом) ======================
+// Максимальная плотность верхних и нижних меток: вольты+темп+навигация на одном
+// такте, темп у правого края перед вольтой, высокие ноты под вольтой, вилки,
+// упирающиеся в оттенки, туплеты со штилями вниз над динамикой, максимум
+// артикуляций. Проверка движка размещения (placement) на столкновения.
+function stress() {
+    const ms = [];
+    const bassC = () => [N('c/3', 'h'), N(['c/3', 'g/3'], 'h')];
+    const highRun = () => [
+        N('a/6', 'q'), N('g/6', 'q'), N('f/6', 'q'), N('e/6', 'q')];
+    const veryHigh = () => [N('c/7', 'h'), N('a/6', 'h')];
+
+    // m0: repeat start + tempo + dynamic + высокие ноты сразу.
+    ms.push(M(4, { treble: highRun(), bass: bassC() }, {
+        _repeat: 'start',
+        _tempo: [{ bpm: 100, beat: 0 }],
+        _dyn: { treble: [{ mark: 'p', beat: 0 }] },
+    }));
+    // m1..m2: вольта 1 + темп + навигация + очень высокие ноты ПОД вольтой.
+    ms.push(M(4, { treble: veryHigh(), bass: bassC() }, {
+        _volta: { numbers: [1], span: 2 },
+        _tempo: [{ bpm: 116, beat: 2 }],
+    }));
+    ms.push(M(4, { treble: veryHigh(), bass: bassC() }, {
+        _nav: 'segno',
+        _tempo: [{ bpm: 108, beat: 0 }],
+        _repeat: 'end',
+    }));
+    // m3: вольта 2 + coda-глиф.
+    ms.push(M(4, { treble: highRun(), bass: bassC() }, {
+        _volta: { numbers: [2], span: 1 },
+        _nav: 'coda',
+    }));
+    // m4: темп у ПРАВОГО края такта — текст пересекает границу такта m5,
+    // над которым стоит вольта.
+    ms.push(M(4, { treble: [N('c/5', 'h'), N('d/5', 'h')], bass: bassC() }, {
+        _tempo: [{ bpm: 152, beat: 3 }],
+    }));
+    // m5..m6: вольта поверх всей пары, высокие ноты.
+    ms.push(M(4, { treble: veryHigh(), bass: bassC() }, {
+        _volta: { numbers: [1, 2], span: 2 },
+    }));
+    ms.push(M(4, { treble: highRun(), bass: bassC() }, {}));
+    // m7..m8: вилка p -> f, упирающаяся торцами в оттенки (тест зазора).
+    ms.push(M(4, { treble: [N('e/5', 'w')], bass: bassC() }, {
+        _dyn: { treble: [{ mark: 'p', beat: 0 }] },
+        _hair: [{ type: 'crescendo', voice: 'treble', sb: 0, em: 8, eb: 0 }],
+    }));
+    ms.push(M(4, { treble: [N('g/5', 'w')], bass: bassC() }, {
+        _dyn: { treble: [{ mark: 'f', beat: 0 }] },
+    }));
+    // m9: туплет со штилями ВНИЗ в басу (скобка снизу) над оттенком pp.
+    ms.push(M(4, {
+        treble: [N('e/5', 'w')],
+        bass: [
+            N('g/3', 'q', { tuplet: T3, tupletStart: true }),
+            N('a/3', 'q', { tuplet: T3 }),
+            N('b/3', 'q', { tuplet: T3 }),
+            N('g/3', 'q'), N('f/3', 'q'),
+        ],
+    }, {
+        _dyn: { bass: [{ mark: 'pp', beat: 0 }] },
+        _hair: [{ type: 'diminuendo', voice: 'bass', sb: 0, em: 9, eb: 4 }],
+    }));
+    // m10..m11: максимум артикуляций + динамика + вилка.
+    const arts = () => [
+        N('c/5', 'q', { art: ['accent', 'staccato'] }),
+        N('d/5', 'q', { art: ['marcato', 'tenuto'] }),
+        N('e/5', 'q', { art: ['staccato', 'tenuto', 'accent'] }),
+        N('f/5', 'q', { art: ['staccatissimo'] }),
+    ];
+    ms.push(M(4, { treble: arts(), bass: bassC() }, {
+        _dyn: { treble: [{ mark: 'sf', beat: 0 }] },
+        _hair: [{ type: 'crescendo', voice: 'treble', sb: 0, em: 11, eb: 3 }],
+    }));
+    ms.push(M(4, { treble: arts(), bass: bassC() }, {
+        _dyn: { treble: [{ mark: 'ff', beat: 3 }] },
+    }));
+    // m12: плотные 32-е со знаками + смена тональности.
+    const run32 = [];
+    const sc = ['c/5', 'db/5', 'eb/5', 'f/5', 'gb/5', 'ab/5', 'bb/5', 'c/6'];
+    for (let r = 0; r < 4; r++) for (let k = 0; k < 8; k++) run32.push(N(sc[k], '32'));
+    ms.push(M(4, { treble: run32, bass: bassC() }, { _key: 'Db' }));
+    // m13: навигация текстом справа + темп в том же такте.
+    ms.push(M(4, { treble: [N('db/5', 'w')], bass: [N('db/3', 'w')] }, {
+        _nav: 'dalSegnoAlFine',
+        _tempo: [{ bpm: 88, beat: 2 }],
+        _bar: 'final',
+    }));
+    return {
+        title: 'Стресс-тест размещения',
+        composer: 'ScoreFlow',
+        instrument: 'piano',
+        keySignature: 'C',
+        timeSignature: '4/4',
+        tempo: 100,
+        measures: ms,
+    };
+}
+
 const fixtures = {
     piano_full: pianoFull(), drums: drums(), dense: dense(), long: longSuite(),
+    stress: stress(),
 };
 for (const name in fixtures) {
     const path = join(OUT, name + '.json');

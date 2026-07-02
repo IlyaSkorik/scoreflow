@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>ScoreFlow Collision Audit</title>
+    <!-- Численный аудит столкновений нотации: рендерит фикстуру ОБОИМИ
+         пайплайнами (печать + экран), собирает bounding box'ы слоёв по
+         SVG-классам (vf-sf-volta/tempo/nav/dyn/hairpin/tuplet/mnum +
+         vf-stavenote/vf-beam) и печатает пересечения МЕЖДУ слоями в
+         <pre id="audit-result"> (JSON). Запуск:
+           node test/print/serve.mjs
+           msedge --headless --virtual-time-budget=15000 --dump-dom \
+             "http://localhost:8123/test/print/audit.html?fixture=stress"
+    -->
+    <script src="/assets/www/js/vexflow.js"></script>
+    <style>
+        body { margin: 0; background: #fff; }
+        .pf-page { width: 794px; height: 1123px; position: relative;
+                   margin: 8px auto; background: #fff; overflow: hidden; }
+        #notation-container { position: relative; width: 900px; padding: 8px; }
+        #audit-result { white-space: pre-wrap; font: 11px monospace; }
+    </style>
+</head>
+<body>
+    <pre id="audit-result">running…</pre>
+    <div id="print-root"></div>
+    <div id="notation-container"><div id="playhead"></div></div>
+    <script type="module">
+        import { renderPrintPages } from '/assets/www/js/render/print.js';
+        import { render } from '/assets/www/js/render/render.js';
+        import { state } from '/assets/www/js/utils/state.js';
+
+        // Слои аудита: класс -> имя. Ноты VexFlow включают артикуляции.
+        const LAYERS = {
+            'vf-sf-volta': 'volta', 'vf-sf-tempo': 'tempo', 'vf-sf-nav': 'nav',
+            'vf-sf-dyn': 'dyn', 'vf-sf-hairpin': 'hairpin',
+            'vf-sf-tuplet': 'tuplet', 'vf-sf-mnum': 'mnum',
+            'vf-stavenote': 'note', 'vf-beam': 'beam',
+        };
+        // Пары, которые НЕ проверяем: внутри слоя (кроме dyn) и легитимные
+        // касания (туплет обнимает свои ноты/балки; балка растёт из нот).
+        const SKIP = new Set([
+            'note|note', 'beam|beam', 'note|beam', 'beam|note',
+            'tuplet|note', 'note|tuplet', 'tuplet|beam', 'beam|tuplet',
+            'volta|volta', 'hairpin|hairpin', 'tuplet|tuplet',
+            'tempo|tempo', 'nav|nav', 'mnum|mnum',
+        ]);
+        const TOL = 1.0; // допуск (px/u): игнорируем «касания» тоньше допуска
+
+        function collectBoxes(svg) {
+            const out = [];
+            for (const cls in LAYERS) {
+                svg.querySelectorAll('g.' + cls).forEach((g) => {
+                    let b;
+                    try { b = g.getBBox(); } catch (e) { return; }
+                    if (!b || b.width <= 0 || b.height <= 0) return;
+                    out.push({ layer: LAYERS[cls],
+                        x0: b.x, y0: b.y, x1: b.x + b.width, y1: b.y + b.height });
+                });
+            }
+            return out;
+        }
+
+        function overlaps(boxes, pageTag) {
+            const bad = [];
+            for (let i = 0; i < boxes.length; i++) {
+                for (let j = i + 1; j < boxes.length; j++) {
+                    const a = boxes[i], b = boxes[j];
+                    if (a.layer === b.layer && a.layer !== 'dyn') continue;
+                    if (SKIP.has(a.layer + '|' + b.layer)) continue;
+                    const ox = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0);
+                    const oy = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
+                    if (ox > TOL && oy > TOL) {
+                        const r = (v) => Math.round(v * 10) / 10;
+                        bad.push({
+                            page: pageTag,
+                            a: a.layer, b: b.layer,
+                            overlap: [r(ox), r(oy)],
+                            abox: [r(a.x0), r(a.y0), r(a.x1), r(a.y1)],
+                            bbox: [r(b.x0), r(b.y0), r(b.x1), r(b.y1)],
+                        });
+                    }
+                }
+            }
+            return bad;
+        }
+
+        const name = new URLSearchParams(location.search).get('fixture') || 'stress';
+        const out = { fixture: name, print: [], screen: [], error: null };
+        try {
+            const res = await fetch('/test/print/fixtures/' + name + '.json');
+            const score = await res.json();
+
+            const pages = renderPrintPages(score);
+            document.querySelectorAll('#print-root svg').forEach((svg, p) => {
+                out.print.push(...overlaps(collectBoxes(svg), 'p' + (p + 1)));
+            });
+            out.pages = pages;
+
+            state.lastPayload = score;
+            // Экран перерисовывается адаптивно (computeDesiredSpacing -> rAF);
+            // в headless rAF ненадёжен — прогоняем сходимость синхронно.
+            render(score);
+            render(score);
+            render(score);
+            const ssvg = document.querySelector('#notation-container svg');
+            if (ssvg) out.screen = overlaps(collectBoxes(ssvg), 'screen');
+            // Идентификация нот в экранных столкновениях: реестр noteHits.
+            for (const c of out.screen) {
+                if (c.a !== 'note' && c.b !== 'note') continue;
+                const nb = c.a === 'note' ? c.abox : c.bbox;
+                c.notes = (state.noteHits || []).filter((h) =>
+                    h.x < nb[2] && h.x + h.w > nb[0] &&
+                    h.y < nb[3] && h.y + h.h > nb[1] &&
+                    Math.abs(h.y - nb[1]) < 3)
+                    .map((h) => h.id);
+            }
+        } catch (e) {
+            out.error = String(e.stack || e);
+        }
+        document.getElementById('audit-result').textContent =
+            'AUDIT-JSON:' + JSON.stringify(out, null, 1);
+        document.title = name + ': print=' + out.print.length +
+            ' screen=' + out.screen.length + (out.error ? ' ERROR' : '');
+    </script>
+</body>
+</html>
