@@ -1,12 +1,12 @@
 import '../models/score.dart';
 import 'score_repository_stub.dart'
-    if (dart.library.io) 'score_repository_io.dart'
-    if (dart.library.js_interop) 'score_repository_web.dart' as impl;
+    if (dart.library.io) 'score_repository_backend.dart'
+    if (dart.library.js_interop) 'score_repository_backend.dart' as impl;
 
 /// Local score storage (offline-first, no backend).
 ///
 /// Android/iOS: JSON files under application documents.
-/// Web: `localStorage` (same public API for UI).
+/// Web: IndexedDB (`scoreflow` / `scores`).
 class ScoreRepository {
   final impl.ScoreRepositoryBackend _backend = impl.ScoreRepositoryBackend();
 

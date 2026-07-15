@@ -2,10 +2,12 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
-import '../models/score.dart';
+import 'score_storage.dart';
 
-/// File-based score storage (Android / iOS).
-class ScoreRepositoryBackend {
+ScoreStorage createScoreStorage() => FileScoreStorage();
+
+/// JSON file storage under `<app documents>/scoreflow/scores/<id>.json`.
+class FileScoreStorage implements ScoreStorage {
   Directory? _cachedDir;
 
   Future<Directory> _dir() async {
@@ -20,39 +22,34 @@ class ScoreRepositoryBackend {
 
   File _fileFor(Directory dir, String id) => File('${dir.path}/$id.json');
 
-  Future<List<Score>> listAll() async {
+  @override
+  Future<List<String>> listIds() async {
     final dir = await _dir();
     final files = await dir
         .list()
         .where((e) => e is File && e.path.endsWith('.json'))
         .cast<File>()
         .toList();
-
-    final scores = <Score>[];
-    for (final f in files) {
-      try {
-        scores.add(Score.decode(await f.readAsString()));
-      } catch (_) {
-        // Skip corrupt files without failing the whole list.
-      }
-    }
-    scores.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
-    return scores;
+    return files
+        .map((f) => f.uri.pathSegments.last.replaceAll('.json', ''))
+        .toList();
   }
 
-  Future<Score?> load(String id) async {
+  @override
+  Future<String?> readJson(String id) async {
     final dir = await _dir();
     final f = _fileFor(dir, id);
     if (!await f.exists()) return null;
-    return Score.decode(await f.readAsString());
+    return f.readAsString();
   }
 
-  Future<void> save(Score score) async {
-    score.updatedAt = DateTime.now();
+  @override
+  Future<void> writeJson(String id, String json) async {
     final dir = await _dir();
-    await _fileFor(dir, score.id).writeAsString(score.encode(), flush: true);
+    await _fileFor(dir, id).writeAsString(json, flush: true);
   }
 
+  @override
   Future<void> delete(String id) async {
     final dir = await _dir();
     final f = _fileFor(dir, id);
