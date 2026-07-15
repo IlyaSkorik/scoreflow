@@ -1,0 +1,12 @@
+{
+  "name": "scoreflow",
+  "private": true,
+  "description": "ScoreFlow build tooling",
+  "scripts": {
+    "fetch-audio": "node tools/fetch_audio_assets.mjs",
+    "link-web-assets": "node tools/link_web_assets.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

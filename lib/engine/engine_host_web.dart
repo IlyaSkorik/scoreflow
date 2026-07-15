@@ -7,6 +7,7 @@ import 'dart:ui_web' as ui_web;
 import 'package:flutter/widgets.dart';
 import 'package:web/web.dart' as web;
 
+import 'engine_assets.dart';
 import 'engine_host.dart';
 
 /// Web engine host: same-origin iframe over Flutter assets — no localhost,
@@ -18,7 +19,7 @@ class WebEngineHost implements EngineHost {
   WebEngineHost({required this.callbacks}) {
     _viewType = 'scoreflow-engine-${_nextViewId++}';
     _iframe = web.HTMLIFrameElement()
-      ..src = _engineAssetUrl()
+      ..src = engineIndexUrl()
       ..style.border = 'none'
       ..style.width = '100%'
       ..style.height = '100%'
@@ -56,11 +57,6 @@ class WebEngineHost implements EngineHost {
   @override
   bool get isReady => _ready;
 
-  static String _engineAssetUrl() {
-    // Flutter serves pubspec assets under the assetManager URL space.
-    return ui_web.assetManager.getAssetUrl('assets/www/index.html');
-  }
-
   void _onIFrameLoad() {
     if (_disposed) return;
     try {
@@ -80,8 +76,9 @@ class WebEngineHost implements EngineHost {
     final win = _iframe.contentWindow;
     if (win == null) return;
 
-    win.eval(r'''
+    win.eval('''
 (function () {
+  ${engineAssetConfigJs()}
   if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
     return;
   }

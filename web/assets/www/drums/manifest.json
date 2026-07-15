@@ -1,0 +1,16 @@
+{
+  "kit": "Lightweight acoustic kit — Tone.js demo samples (MIT). Недостающие партии: синтез-fallback.",
+  "format": "mp3",
+  "basePath": "drums/",
+  "comment": "Один реальный сэмпл на партию (single-velocity, как Salamander-рояль); динамика по velocity делается громкостью/яркостью в движке. Файлы кладёт `node tools/fetch_drums.mjs`. Ключи = канонические типы drumType(); открытый/педальный хай-хэт, ride и ride bell здесь не заданы и звучат через синтез-fallback. Для multi-velocity добавьте слои с loVel/hiVel — движок их поддерживает.",
+  "instruments": {
+    "kick":         { "layers": [ { "file": "kick.mp3", "loVel": 0, "hiVel": 127 } ] },
+    "snare":        { "layers": [ { "file": "snare.mp3", "loVel": 0, "hiVel": 127 } ] },
+    "hihat_closed": { "group": "hihat", "layers": [ { "file": "hihat_closed.mp3", "loVel": 0, "hiVel": 127 } ] },
+    "crash1":       { "layers": [ { "file": "crash1.mp3", "loVel": 0, "hiVel": 127 } ] },
+    "crash2":       { "layers": [ { "file": "crash2.mp3", "loVel": 0, "hiVel": 127 } ] },
+    "tom_high":     { "layers": [ { "file": "tom_high.mp3", "loVel": 0, "hiVel": 127 } ] },
+    "tom_mid":      { "layers": [ { "file": "tom_mid.mp3", "loVel": 0, "hiVel": 127 } ] },
+    "tom_floor":    { "layers": [ { "file": "tom_floor.mp3", "loVel": 0, "hiVel": 127 } ] }
+  }
+}

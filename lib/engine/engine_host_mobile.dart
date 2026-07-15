@@ -3,15 +3,12 @@ import 'dart:convert';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
+import 'engine_assets.dart';
 import 'engine_host.dart';
 
 /// Mobile (Android/iOS) engine host: InAppWebView + InAppLocalhostServer.
 EngineHost createEngineHost({required EngineHostCallbacks callbacks}) =>
     MobileEngineHost(callbacks: callbacks);
-
-/// Absolute URL served by [InAppLocalhostServer] for the bundled engine.
-const String kMobileEngineUrl =
-    'http://localhost:8080/assets/www/index.html';
 
 class MobileEngineHost implements EngineHost {
   MobileEngineHost({required this.callbacks});
@@ -26,7 +23,7 @@ class MobileEngineHost implements EngineHost {
   @override
   Widget build() {
     return InAppWebView(
-      initialUrlRequest: URLRequest(url: WebUri(kMobileEngineUrl)),
+      initialUrlRequest: URLRequest(url: WebUri(engineIndexUrl())),
       initialSettings: InAppWebViewSettings(
         javaScriptEnabled: true,
         transparentBackground: false,
@@ -65,7 +62,8 @@ class MobileEngineHost implements EngineHost {
           callback: (args) => callbacks.onRendered?.call(),
         );
       },
-      onLoadStop: (controller, url) {
+      onLoadStop: (controller, url) async {
+        await controller.evaluateJavascript(source: engineAssetConfigJs());
         _ready = true;
         callbacks.onReady?.call();
       },

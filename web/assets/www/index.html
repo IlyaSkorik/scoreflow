@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ScoreFlow Engine</title>
+
+    <!-- Offline notation engine. Mobile: served by InAppLocalhostServer.
+         Web: loaded from Flutter assets (same-origin iframe). Relative
+         paths resolve against this document URL on both platforms. -->
+    <script src="js/vexflow.js"></script>
+
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            background-color: #ffffff;
+            font-family: sans-serif;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        #notation-container {
+            position: relative;
+            width: 100%;
+            box-sizing: border-box;
+            padding: 8px;
+        }
+        #notation-container svg { display: block; }
+        #playhead {
+            position: absolute;
+            top: 8px;
+            width: 2px;
+            background-color: rgba(33, 150, 243, 0.85);
+            opacity: 0;
+            transition: opacity 0.12s ease;
+            pointer-events: none;
+        }
+        #playhead.active { opacity: 1; }
+
+        /* Слой подсветки звучащих нот (поверх SVG, не перехватывает клики). */
+        #note-highlights {
+            position: absolute;
+            left: 0; top: 0;
+            pointer-events: none;
+        }
+        .note-hl {
+            position: absolute;
+            background: rgba(33, 150, 243, 0.22);
+            border-radius: 3px;
+            pointer-events: none;
+        }
+        /* Подсветка выделения при наборе лиги фразировки (slur). Иной цвет,
+           чтобы отличать от синей подсветки звучащих нот при playback. */
+        .note-sel {
+            position: absolute;
+            background: rgba(76, 175, 80, 0.28);
+            border-radius: 3px;
+            pointer-events: none;
+        }
+        #engine-error {
+            padding: 16px;
+            color: #c62828;
+            font-size: 14px;
+            text-align: center;
+        }
+
+        /* Постраничная вёрстка A4. На экране уносим за пределы вьюпорта, но
+           НЕ через display:none — иначе measureText/getBBox вернут 0 и текст
+           (заголовок) не отцентрируется. При печати возвращаем на место. */
+        #print-root { position: fixed; left: -10000px; top: 0; }
+        .pf-page {
+            width: 794px;
+            height: 1123px;
+            position: relative;
+            margin: 0 auto;
+            background: #ffffff;
+            overflow: hidden;
+        }
+        @media print {
+            @page { size: A4; margin: 0; }
+            html, body { background: #ffffff; }
+            #notation-container { display: none !important; }
+            #print-root { position: static; left: auto; }
+            .pf-page {
+                margin: 0;
+                page-break-after: always;
+                break-after: page;
+            }
+            .pf-page:last-child {
+                page-break-after: auto;
+                break-after: auto;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="notation-container">
+        <div id="playhead"></div>
+    </div>
+
+    <!-- Контейнер постраничной вёрстки A4 (виден только при печати) -->
+    <div id="print-root"></div>
+
+    <!-- Точка входа движка: модульный bridge (Flutter ↔ Engine). Вся
+         бизнес-логика живёт в ES-модулях под js/. -->
+    <script type="module" src="./js/bridge/bridge.js"></script>
+</body>
+</html>
