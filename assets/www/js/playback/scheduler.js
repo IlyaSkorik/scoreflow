@@ -138,19 +138,20 @@ export const Playback = {
 
     start: async function (payload, tempo) {
         if (!payload) return;
-        // Safari iOS / Flutter Web: await parent AudioContext unlock first.
+        // Safari iOS / Flutter Web: await parent AudioContext unlock only —
+        // never block transport on sample download (that caused ~1 min delay).
         await AudioEngine.resume();
         const ctx = AudioEngine.ensure();
         if (!ctx) { showError('Web Audio недоступен в этом WebView.'); return; }
         if (ctx.state !== 'running') {
             await AudioEngine.resume();
         }
-        // (Re)load samples against the active context after unlock.
+        // Background sample load — synth fallback plays until ready.
         try {
             if (payload.instrument === 'drums') {
-                await SampledDrums.load(ctx, AudioEngine.master);
+                SampledDrums.load(ctx, AudioEngine.master);
             } else {
-                await SampledPiano.load(ctx, AudioEngine.master);
+                SampledPiano.load(ctx, AudioEngine.master);
             }
         } catch (e) { /* synth fallback */ }
         this.stop(true); // сброс прежней сессии без снятия активности UI

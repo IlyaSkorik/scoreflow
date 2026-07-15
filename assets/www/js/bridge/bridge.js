@@ -63,7 +63,19 @@ window.ScoreFlow = {
 
     /** Unlock Web Audio (call from a user gesture when possible). */
     unlockAudio: async function () {
-        return AudioEngine.resume();
+        const ok = await AudioEngine.resume();
+        const ctx = AudioEngine.ensure();
+        // Warm samples in the background after unlock — never block Play.
+        if (ok && ctx && state.lastPayload) {
+            try {
+                if (state.lastPayload.instrument === 'drums') {
+                    SampledDrums.load(ctx, AudioEngine.master);
+                } else {
+                    SampledPiano.load(ctx, AudioEngine.master);
+                }
+            } catch (e) { /* synth fallback */ }
+        }
+        return ok;
     },
 
     // Метроном: вкл/выкл. Состояние сохраняется между запусками плеера.

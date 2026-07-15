@@ -96,6 +96,14 @@ class WebEngineHost implements EngineHost {
   } catch (e) {}
 })();
 ''');
+    // Also unlock inside the iframe + kick background sample warm-up.
+    final win = _contentWindow;
+    if (win != null && _ready) {
+      win.eval(
+        'window.ScoreFlow && window.ScoreFlow.unlockAudio && '
+        'window.ScoreFlow.unlockAudio();',
+      );
+    }
   }
 
   void _onIFrameLoad() {
@@ -256,21 +264,10 @@ class WebEngineHost implements EngineHost {
   Future<void> play({required int tempo}) async {
     final win = _contentWindow;
     if (win == null || !_ready) return;
-    // 1) Unlock AudioContext in the PARENT document (Flutter gesture lives here).
+    // Unlock in the parent document first (Safari iOS user-gesture rule).
     _unlockParentAudio();
-    // 2) Start playback in the iframe using parent.__scoreflowAudioCtx.
-    win.eval('''
-(function () {
-  var play = function () {
-    return window.handlePlaybackCommand('PLAY', $tempo);
-  };
-  if (window.ScoreFlow && window.ScoreFlow.unlockAudio) {
-    Promise.resolve(window.ScoreFlow.unlockAudio()).then(play).catch(play);
-  } else {
-    play();
-  }
-})();
-''');
+    // Start immediately — Playback.start awaits resume only (not sample I/O).
+    win.eval("window.handlePlaybackCommand('PLAY', $tempo);");
   }
 
   @override

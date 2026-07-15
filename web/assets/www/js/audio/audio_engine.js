@@ -63,13 +63,12 @@ export const AudioEngine = {
         const ctx = this.ensure();
         if (!ctx) return false;
         try {
-            // iOS often reports 'suspended' until a user gesture; resume must
-            // be awaited or note scheduling runs while still locked.
             if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
                 await ctx.resume();
             }
-            await this._primeSilentBuffer();
-            await this._primeHtmlAudio();
+            // Fire-and-forget primes — must not delay transport start.
+            this._primeSilentBuffer();
+            this._primeHtmlAudio();
             this._unlocked = ctx.state === 'running' || this._unlocked;
             return ctx.state === 'running';
         } catch (e) {
