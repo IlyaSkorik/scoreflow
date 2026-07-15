@@ -2,10 +2,9 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../data/score_repository.dart';
-import '../main.dart' show kEngineUrl;
+import '../engine/engine_host.dart';
 import '../models/history.dart';
 import '../models/keysig.dart';
 import '../models/palette.dart';
@@ -108,19 +107,17 @@ class EditorScreen extends StatefulWidget {
 }
 
 class _EditorScreenState extends State<EditorScreen> {
-  InAppWebViewController? _web;
-  bool _ready = false;
+  EngineHost? _engine;
 
-  // Создание платформенной WebView — тяжёлая операция; во время анимации
-  // перехода она давала бы фриз. Пока false — на месте партитуры оверлей
-  // загрузки, WebView монтируется только после завершения перехода.
+  // Creating the platform engine view is heavy; mounting it during the route
+  // transition would jank. While false, show a loading overlay and create the
+  // host only after the transition completes.
   bool _routeSettled = false;
-  // Первый реальный кадр партитуры отрисован (сигнал onRendered из движка) —
-  // до этого оверлей скрывает белую пустую страницу WebView.
+  // First real score frame painted (`onRendered`) — overlay hides the blank
+  // white engine surface until then.
   bool _engineRendered = false;
   Animation<double>? _routeAnim;
-  // Страховка: если движок не поднялся (сервер/JS), снимаем оверлей, чтобы
-  // показать собственный фолбэк WebView, а не вечный спиннер.
+  // Fail-safe: if the engine never comes up, clear the overlay anyway.
   Timer? _overlayFailSafe;
 
   Score? _score;
@@ -152,6 +149,7 @@ class _EditorScreenState extends State<EditorScreen> {
     final anim = ModalRoute.of(context)?.animation;
     if (anim == null || anim.isCompleted) {
       _routeSettled = true;
+      _ensureEngine();
       _armOverlayFailSafe();
     } else {
       _routeAnim = anim;
@@ -164,8 +162,43 @@ class _EditorScreenState extends State<EditorScreen> {
     _routeAnim?.removeStatusListener(_onRouteAnimStatus);
     _routeAnim = null;
     if (!mounted) return;
-    setState(() => _routeSettled = true);
+    setState(() {
+      _routeSettled = true;
+      _ensureEngine();
+    });
     _armOverlayFailSafe();
+  }
+
+  /// Lazily constructs the platform [EngineHost] (once per editor session).
+  void _ensureEngine() {
+    if (_engine != null) return;
+    _engine = createEngineHost(
+      callbacks: EngineHostCallbacks(
+        onReady: () {
+          _render();
+          _maybeLoadSamples();
+        },
+        onRendered: _onEngineRendered,
+        onPlaybackEnded: () {
+          if (mounted && _isPlaying) {
+            setState(() {
+              _isPlaying = false;
+              _liveTempo = null;
+            });
+          }
+        },
+        onNoteTap: _onNoteTap,
+        onTempo: (bpm) {
+          if (mounted && _isPlaying && bpm != _liveTempo) {
+            setState(() => _liveTempo = bpm);
+          }
+        },
+        onError: (message) {
+          debugPrint('Engine error: $message');
+          _onEngineRendered();
+        },
+      ),
+    );
   }
 
   void _armOverlayFailSafe() {
@@ -187,10 +220,10 @@ class _EditorScreenState extends State<EditorScreen> {
   void dispose() {
     _routeAnim?.removeStatusListener(_onRouteAnimStatus);
     _overlayFailSafe?.cancel();
-    // Останавливаем звук при выходе из редактора.
-    _web?.evaluateJavascript(
-      source: "window.handlePlaybackCommand('PAUSE', 0);",
-    );
+    // Stop audio when leaving the editor.
+    _engine?.pause();
+    _engine?.dispose();
+    _engine = null;
     super.dispose();
   }
 
@@ -223,14 +256,12 @@ class _EditorScreenState extends State<EditorScreen> {
   double _filled(List<MusicNote> notes) =>
       notes.fold(0.0, (s, n) => s + (n.auto ? 0 : noteTime(n)));
 
-  // --- мост к движку ---------------------------------------------------
+  // --- engine bridge ---------------------------------------------------
   void _render() {
-    if (!_ready || _web == null || _score == null) return;
+    final engine = _engine;
+    if (engine == null || !engine.isReady || _score == null) return;
     final payload = _score!.renderPayload(_cursor, selection: _selectionMap());
-    final b64 = base64Encode(utf8.encode(payload));
-    _web!.evaluateJavascript(
-      source: "window.ScoreFlow && window.ScoreFlow.renderB64('$b64');",
-    );
+    engine.render(payload);
   }
 
   /// Диапазон выделения для подсветки набора slur: [_selAnchor]..курсор в
@@ -255,9 +286,14 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   void _sendPlayback(String action) {
-    _web?.evaluateJavascript(
-      source: "window.handlePlaybackCommand('$action', ${_score!.tempo});",
-    );
+    final engine = _engine;
+    final score = _score;
+    if (engine == null || score == null) return;
+    if (action == 'PLAY') {
+      engine.play(tempo: score.tempo);
+    } else {
+      engine.pause();
+    }
   }
 
   void _persist() {
@@ -1104,39 +1140,37 @@ class _EditorScreenState extends State<EditorScreen> {
 
   void _toggleMetronome() {
     setState(() => _metronome = !_metronome);
-    _web?.evaluateJavascript(
-      source: 'window.ScoreFlow && window.ScoreFlow.setMetronome($_metronome);',
+    _engine?.evaluate(
+      'window.ScoreFlow && window.ScoreFlow.setMetronome($_metronome);',
     );
   }
 
   void _toggleSustain() {
     setState(() => _sustain = !_sustain);
-    _web?.evaluateJavascript(
-      source: 'window.ScoreFlow && window.ScoreFlow.setSustain($_sustain);',
+    _engine?.evaluate(
+      'window.ScoreFlow && window.ScoreFlow.setSustain($_sustain);',
     );
   }
 
   void _toggleFollow() {
     setState(() => _follow = !_follow);
-    _web?.evaluateJavascript(
-      source:
-          'window.ScoreFlow && window.ScoreFlow.setFollowPlayback($_follow);',
+    _engine?.evaluate(
+      'window.ScoreFlow && window.ScoreFlow.setFollowPlayback($_follow);',
     );
   }
 
   /// Предзагрузка сэмплов под инструмент партитуры (рояль / ударные).
   /// Идемпотентно — повторные вызовы безопасны.
   void _maybeLoadSamples() {
-    if (!_ready || _web == null) return;
+    final engine = _engine;
+    if (engine == null || !engine.isReady) return;
     final fn = switch (_score?.instrument) {
       InstrumentType.piano => 'loadPiano',
       InstrumentType.drums => 'loadDrums',
       _ => null,
     };
     if (fn == null) return;
-    _web!.evaluateJavascript(
-      source: 'window.ScoreFlow && window.ScoreFlow.$fn();',
-    );
+    engine.evaluate('window.ScoreFlow && window.ScoreFlow.$fn();');
   }
 
   Future<void> _rename() async {
@@ -1168,23 +1202,24 @@ class _EditorScreenState extends State<EditorScreen> {
   /// чего вызывается системная печать — Android/iOS дают «Сохранить в PDF».
   Future<void> _exportPdf() async {
     final score = _score;
-    if (score == null || _web == null || !_ready) return;
+    final engine = _engine;
+    if (score == null || engine == null || !engine.isReady) return;
     final messenger = ScaffoldMessenger.of(context);
 
     try {
       final payload = score.renderPayload(_cursor);
       final b64 = base64Encode(utf8.encode(payload));
-      final res = await _web!.callAsyncJavaScript(
-        functionBody: 'return window.ScoreFlow.renderPrintB64(b64);',
+      final res = await engine.callAsync(
+        'return window.ScoreFlow.renderPrintB64(b64);',
         arguments: {'b64': b64},
       );
 
-      final pages = (res?.value as num?)?.toInt() ?? 0;
+      final pages = (res as num?)?.toInt() ?? 0;
       if (pages <= 0) {
         throw Exception('не удалось сверстать страницы');
       }
 
-      await _web!.printCurrentPage();
+      await engine.printPage();
     } catch (e) {
       messenger.showSnackBar(
         SnackBar(content: Text('Не удалось напечатать: $e')),
@@ -1886,80 +1921,13 @@ class _EditorScreenState extends State<EditorScreen> {
     );
   }
 
-  /// Нотная область: WebView с движком VexFlow. Белая подложка — «бумага»
-  /// партитуры (движок рендерит на белом фоне).
+  /// Notation area: platform [EngineHost] (InAppWebView / iframe). White
+  /// backdrop matches engine paper background.
   Widget _buildEngineView() {
+    _ensureEngine();
     return Container(
       color: Colors.white,
-      child: InAppWebView(
-        initialUrlRequest: URLRequest(url: WebUri(kEngineUrl)),
-        initialSettings: InAppWebViewSettings(
-          javaScriptEnabled: true,
-          transparentBackground: false,
-          supportZoom: false,
-          // Разрешаем Web Audio стартовать без прямого DOM-жеста
-          // (воспроизведение запускается через мост из Flutter).
-          mediaPlaybackRequiresUserGesture: false,
-        ),
-        onWebViewCreated: (c) {
-          _web = c;
-          // Тап по ноте/паузе на партитуре -> перемещение курсора.
-          c.addJavaScriptHandler(
-            handlerName: 'onNoteTap',
-            callback: (args) {
-              if (args.isEmpty || args.first is! Map) return;
-              final data = args.first as Map;
-              _onNoteTap(
-                (data['measure'] as num).toInt(),
-                data['voice'] as String,
-                (data['index'] as num).toInt(),
-              );
-            },
-          );
-          // Движок сообщает об окончании воспроизведения -> сброс кнопки.
-          c.addJavaScriptHandler(
-            handlerName: 'onPlaybackEnded',
-            callback: (args) {
-              if (mounted && _isPlaying) {
-                setState(() {
-                  _isPlaying = false;
-                  _liveTempo = null; // вернуть показ начального темпа
-                });
-              }
-            },
-          );
-          // Движок сообщает ДЕЙСТВУЮЩИЙ темп под плейхедом (смены `_tempo`).
-          // Чип темпа «привязан к партитуре»: во время игры показывает его.
-          c.addJavaScriptHandler(
-            handlerName: 'onTempo',
-            callback: (args) {
-              if (!mounted || args.isEmpty) return;
-              final bpm = (args.first as num?)?.toInt();
-              if (bpm != null && _isPlaying && bpm != _liveTempo) {
-                setState(() => _liveTempo = bpm);
-              }
-            },
-          );
-          // Первый кадр партитуры отрисован — снимаем оверлей загрузки.
-          c.addJavaScriptHandler(
-            handlerName: 'onRendered',
-            callback: (args) => _onEngineRendered(),
-          );
-        },
-        onLoadStop: (c, url) {
-          _ready = true;
-          _render();
-          _maybeLoadSamples();
-        },
-        onReceivedError: (c, request, error) {
-          debugPrint(
-            'WebView error: ${error.type} ${error.description} (${request.url})',
-          );
-          // Показываем фолбэк WebView вместо вечного спиннера.
-          _onEngineRendered();
-        },
-        onConsoleMessage: (c, msg) => debugPrint('JS: ${msg.message}'),
-      ),
+      child: _engine!.build(),
     );
   }
 }

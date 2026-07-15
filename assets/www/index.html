@@ -5,8 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>ScoreFlow Engine</title>
 
-    <!-- Локальный (offline) движок нотного рендеринга. Грузится через
-         InAppLocalhostServer, поэтому относительный путь резолвится. -->
+    <!-- Offline notation engine. Mobile: served by InAppLocalhostServer.
+         Web: loaded from Flutter assets (same-origin iframe). Relative
+         paths resolve against this document URL on both platforms. -->
     <script src="js/vexflow.js"></script>
 
     <style>

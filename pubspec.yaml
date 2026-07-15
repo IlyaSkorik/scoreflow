@@ -11,9 +11,11 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
-  # Самый стабильный плагин для WebView-бриджей с JS
+  # Mobile WebView bridge (Android/iOS only — never used on Flutter Web)
   flutter_inappwebview: ^6.1.5
-  # Локальное файловое хранилище партитур (offline-first)
+  # Browser DOM / JS interop for the Flutter Web engine host
+  web: ^1.1.1
+  # Локальное файловое хранилище партитур (offline-first, mobile)
   path_provider: ^2.1.4
   # Идентификаторы партитур
   uuid: ^4.5.1
