@@ -15,6 +15,7 @@ import { Playback } from '../playback/scheduler.js';
 import { render } from '../render/render.js';
 import { buildVoice, measureMinWidth } from '../render/layout.js';
 import { renderPrintPages } from '../render/print.js';
+import { exportPrintPages } from '../utils/export_print.js';
 
 // =================================================================
 //  Публичный мост (вызывается из Flutter)
@@ -49,6 +50,20 @@ window.ScoreFlow = {
             showError('Ошибка вёрстки печати: ' + e.message);
             return 0;
         }
+    },
+
+    /**
+     * Export already-rendered print pages.
+     * Desktop/Android: window.print().
+     * iOS Safari: navigator.share() or Blob URL tab.
+     */
+    exportPrint: async function (title) {
+        return exportPrintPages(title || (state.lastPayload && state.lastPayload.title) || 'ScoreFlow');
+    },
+
+    /** Unlock Web Audio (call from a user gesture when possible). */
+    unlockAudio: async function () {
+        return AudioEngine.resume();
     },
 
     // Метроном: вкл/выкл. Состояние сохраняется между запусками плеера.
@@ -120,13 +135,19 @@ window.ScoreFlow = {
 
 // Контракт плеера сохранён: 'PLAY' (с tempo) запускает воспроизведение
 // текущей партитуры с начала, 'PAUSE' останавливает.
+// На Safari iOS PLAY ждёт unlock AudioContext перед планированием.
 window.handlePlaybackCommand = function (action, value) {
     if (action === 'PLAY') {
-        Playback.start(state.lastPayload, value);
+        return Playback.start(state.lastPayload, value);
     } else if (action === 'PAUSE') {
         Playback.stop();
+        return Promise.resolve();
     }
+    return Promise.resolve();
 };
+
+// Unlock audio on the first gesture inside the engine document.
+AudioEngine.installGestureUnlock();
 
 // Мост Flutter готов.
 window.addEventListener('flutterInAppWebViewPlatformReady', function () {

@@ -51,6 +51,7 @@ class WebEngineHost implements EngineHost {
 
   bool _ready = false;
   bool _disposed = false;
+  bool _parentGestureBound = false;
   int _asyncId = 0;
   final Map<int, Completer<Object?>> _pending = {};
 
@@ -97,23 +98,51 @@ class WebEngineHost implements EngineHost {
     var data = ev.data;
     if (!data || data.source !== 'scoreflow-host') return;
     if (data.type === 'eval') {
-      var result = null, error = null;
-      try {
-        result = (0, eval)(data.expression);
-      } catch (e) {
-        error = String(e && e.message ? e.message : e);
-      }
-      window.parent.postMessage({
-        source: 'scoreflow-engine',
-        type: 'eval-result',
-        id: data.id,
-        result: result,
-        error: error
-      }, '*');
+      Promise.resolve().then(function () {
+        return (0, eval)(data.expression);
+      }).then(function (result) {
+        return Promise.resolve(result);
+      }).then(function (result) {
+        window.parent.postMessage({
+          source: 'scoreflow-engine',
+          type: 'eval-result',
+          id: data.id,
+          result: result,
+          error: null
+        }, '*');
+      }).catch(function (e) {
+        window.parent.postMessage({
+          source: 'scoreflow-engine',
+          type: 'eval-result',
+          id: data.id,
+          result: null,
+          error: String(e && e.message ? e.message : e)
+        }, '*');
+      });
     }
   });
 })();
 ''');
+
+    _installParentGestureUnlock();
+  }
+
+  /// Forward the first user gesture from the Flutter host page into the
+  /// engine iframe so Safari iOS unlocks AudioContext before Play is tapped.
+  void _installParentGestureUnlock() {
+    if (_parentGestureBound) return;
+    _parentGestureBound = true;
+    final unlock = ((web.Event _) {
+      final win = _contentWindow;
+      if (win == null) return;
+      win.eval(
+        'window.ScoreFlow && window.ScoreFlow.unlockAudio && '
+        'window.ScoreFlow.unlockAudio();',
+      );
+    }).toJS;
+    for (final type in ['touchstart', 'pointerdown', 'mousedown', 'click']) {
+      web.window.addEventListener(type, unlock, true.toJS);
+    }
   }
 
   void _onMessage(web.MessageEvent event) {
@@ -191,9 +220,25 @@ class WebEngineHost implements EngineHost {
   }
 
   @override
-  Future<void> play({required int tempo}) => evaluate(
-        "window.handlePlaybackCommand('PLAY', $tempo);",
-      );
+  Future<void> play({required int tempo}) async {
+    final win = _contentWindow;
+    if (win == null || !_ready) return;
+    // Synchronously enter the iframe during the Flutter button gesture so
+    // Safari iOS can unlock AudioContext; then await resume and start.
+    win.eval('''
+(function () {
+  var play = function () {
+    return window.handlePlaybackCommand('PLAY', $tempo);
+  };
+  if (window.ScoreFlow && window.ScoreFlow.unlockAudio) {
+    // unlockAudio starts ctx.resume() before its first await (user activation).
+    Promise.resolve(window.ScoreFlow.unlockAudio()).then(play).catch(play);
+  } else {
+    play();
+  }
+})();
+''');
+  }
 
   @override
   Future<void> pause() => evaluate(
@@ -216,12 +261,13 @@ class WebEngineHost implements EngineHost {
     if (win == null || !_ready) return null;
 
     // Wrap like InAppWebView callAsyncJavaScript: args become locals.
+    // Use async IIFE so `await` inside functionBody works (export / unlock).
     final decls = StringBuffer();
     arguments.forEach((key, value) {
       decls.writeln('var $key = ${jsonEncode(value)};');
     });
     final expression =
-        '(function(){ $decls $functionBody })()';
+        '(async function(){ $decls $functionBody })()';
 
     final id = ++_asyncId;
     final completer = Completer<Object?>();
@@ -248,7 +294,19 @@ class WebEngineHost implements EngineHost {
 
   @override
   Future<void> printPage() async {
-    _contentWindow?.print();
+    final win = _contentWindow;
+    if (win == null || !_ready) return;
+    // Start export synchronously in the Flutter button gesture stack so
+    // Safari iOS accepts navigator.share(). Desktop falls through to print().
+    win.eval('''
+(function () {
+  if (window.ScoreFlow && window.ScoreFlow.exportPrint) {
+    window.ScoreFlow.exportPrint();
+  } else {
+    window.print();
+  }
+})();
+''');
   }
 
   @override

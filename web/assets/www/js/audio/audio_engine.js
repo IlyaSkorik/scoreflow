@@ -1,10 +1,17 @@
 import { SampledPiano } from './sampled_piano.js';
 import { SampledDrums } from './sampled_drums.js';
 import { velocityGain } from './velocity.js';
+import { isIOS, isSafariIOS } from '../utils/platform.js';
 
 // --- AudioEngine (Web Audio API, полностью оффлайн) ----------------
 export const AudioEngine = {
     ctx: null, master: null, noise: null,
+    _unlocked: false,
+    _gestureBound: false,
+    _silentAudio: null,
+
+    isIOS: function () { return isIOS(); },
+    isSafariIOS: function () { return isSafariIOS(); },
 
     ensure: function () {
         if (this.ctx) return this.ctx;
@@ -22,9 +29,88 @@ export const AudioEngine = {
         this.noise = buf;
         return this.ctx;
     },
-    resume: function () {
-        if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+
+    /**
+     * Resume + unlock Web Audio for Safari iOS.
+     * Always awaits AudioContext.resume() before playback. Safe to call
+     * repeatedly; idempotent after the first successful unlock.
+     */
+    resume: async function () {
+        const ctx = this.ensure();
+        if (!ctx) return false;
+        try {
+            // iOS often reports 'suspended' until a user gesture; resume must
+            // be awaited or note scheduling runs while still locked.
+            if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
+                await ctx.resume();
+            }
+            await this._primeSilentBuffer();
+            await this._primeHtmlAudio();
+            this._unlocked = ctx.state === 'running' || this._unlocked;
+            return ctx.state === 'running';
+        } catch (e) {
+            console.log('AudioEngine.resume failed: ' + (e && e.message ? e.message : e));
+            return false;
+        }
     },
+
+    /** Play a zero-length silent buffer — unlocks Web Audio on iOS. */
+    _primeSilentBuffer: async function () {
+        const ctx = this.ctx;
+        if (!ctx) return;
+        try {
+            const buf = ctx.createBuffer(1, 1, ctx.sampleRate || 22050);
+            const src = ctx.createBufferSource();
+            src.buffer = buf;
+            src.connect(ctx.destination);
+            src.start(0);
+            if (typeof src.stop === 'function') {
+                try { src.stop(ctx.currentTime + 0.001); } catch (e) { /* no-op */ }
+            }
+        } catch (e) { /* no-op */ }
+    },
+
+    /**
+     * HTMLAudioElement unlock for iOS (some WebKit builds require a real
+     * media element play() inside a user gesture in addition to AudioContext).
+     */
+    _primeHtmlAudio: async function () {
+        if (!isIOS()) return;
+        try {
+            if (!this._silentAudio) {
+                // Minimal valid silent WAV (PCM).
+                const wav = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+                this._silentAudio = new Audio(wav);
+                this._silentAudio.setAttribute('playsinline', 'true');
+                this._silentAudio.preload = 'auto';
+                this._silentAudio.volume = 0.01;
+            }
+            const p = this._silentAudio.play();
+            if (p && typeof p.then === 'function') {
+                await p.catch(function () { /* autoplay policy */ });
+                try { this._silentAudio.pause(); } catch (e) { /* no-op */ }
+            }
+        } catch (e) { /* no-op */ }
+    },
+
+    /**
+     * Bind one-shot unlock on the first real user gesture inside the engine
+     * document (tap on notation, etc.). Required on Safari iOS because Flutter
+     * UI gestures may not unlock an iframe AudioContext.
+     */
+    installGestureUnlock: function () {
+        if (this._gestureBound) return;
+        this._gestureBound = true;
+        const self = this;
+        const unlock = function () {
+            self.resume();
+        };
+        const opts = { capture: true, passive: true };
+        ['touchstart', 'pointerdown', 'mousedown', 'click'].forEach(function (type) {
+            document.addEventListener(type, unlock, opts);
+        });
+    },
+
     noiseSource: function () {
         const s = this.ctx.createBufferSource();
         s.buffer = this.noise;

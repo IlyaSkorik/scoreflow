@@ -136,11 +136,16 @@ export const Playback = {
                this.comp.events[this.nextEvent].startBeat < curBeat) this.nextEvent++;
     },
 
-    start: function (payload, tempo) {
+    start: async function (payload, tempo) {
         if (!payload) return;
         const ctx = AudioEngine.ensure();
         if (!ctx) { showError('Web Audio недоступен в этом WebView.'); return; }
-        AudioEngine.resume();
+        // Safari iOS: must await resume() before any note scheduling.
+        await AudioEngine.resume();
+        if (ctx.state !== 'running') {
+            // Still locked — retry once (covers late gesture activation).
+            await AudioEngine.resume();
+        }
         this.stop(true); // сброс прежней сессии без снятия активности UI
         // Базовый темп (bpm) — из слайдера транспорта; смены `_tempo` в партитуре
         // компилятор накладывает поверх. Абсолютное время события считает tempo map

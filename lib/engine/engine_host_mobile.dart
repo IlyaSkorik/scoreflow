@@ -90,7 +90,10 @@ class MobileEngineHost implements EngineHost {
 
   @override
   Future<void> play({required int tempo}) => evaluate(
-        "window.handlePlaybackCommand('PLAY', $tempo);",
+        // Unlock is started synchronously inside unlockAudio (Safari / WKWebView).
+        "Promise.resolve(window.ScoreFlow && window.ScoreFlow.unlockAudio "
+        "? window.ScoreFlow.unlockAudio() : null)"
+        ".then(function(){ return window.handlePlaybackCommand('PLAY', $tempo); });",
       );
 
   @override
