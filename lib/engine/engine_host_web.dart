@@ -58,10 +58,51 @@ class WebEngineHost implements EngineHost {
   @override
   bool get isReady => _ready;
 
+  /// Create/resume AudioContext on the Flutter host page (not the iframe).
+  /// Safari iOS only unlocks audio from a gesture in the same document as the
+  /// AudioContext; Flutter touches happen here, engine runs in the iframe.
+  void _unlockParentAudio() {
+    web.window.eval(r'''
+(function () {
+  var AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  if (!window.__scoreflowAudioCtx) {
+    window.__scoreflowAudioCtx = new AC();
+  }
+  var ctx = window.__scoreflowAudioCtx;
+  if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
+    try { ctx.resume(); } catch (e) {}
+  }
+  try {
+    var b = ctx.createBuffer(1, 1, ctx.sampleRate || 22050);
+    var s = ctx.createBufferSource();
+    s.buffer = b;
+    s.connect(ctx.destination);
+    s.start(0);
+  } catch (e) {}
+  try {
+    if (!window.__scoreflowSilentAudio) {
+      var a = new Audio('data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=');
+      a.setAttribute('playsinline', 'true');
+      a.volume = 0.01;
+      window.__scoreflowSilentAudio = a;
+    }
+    var p = window.__scoreflowSilentAudio.play();
+    if (p && p.then) {
+      p.then(function () {
+        try { window.__scoreflowSilentAudio.pause(); } catch (e) {}
+      }).catch(function () {});
+    }
+  } catch (e) {}
+})();
+''');
+  }
+
   void _onIFrameLoad() {
     if (_disposed) return;
     try {
       _installBridgePolyfill();
+      _installParentGestureUnlock();
       _ready = true;
       callbacks.onReady?.call();
     } catch (e) {
@@ -123,25 +164,17 @@ class WebEngineHost implements EngineHost {
   });
 })();
 ''');
-
-    _installParentGestureUnlock();
   }
 
-  /// Forward the first user gesture from the Flutter host page into the
-  /// engine iframe so Safari iOS unlocks AudioContext before Play is tapped.
+  /// Unlock parent AudioContext on the first real touch/click anywhere.
   void _installParentGestureUnlock() {
     if (_parentGestureBound) return;
     _parentGestureBound = true;
     final unlock = ((web.Event _) {
-      final win = _contentWindow;
-      if (win == null) return;
-      win.eval(
-        'window.ScoreFlow && window.ScoreFlow.unlockAudio && '
-        'window.ScoreFlow.unlockAudio();',
-      );
+      _unlockParentAudio();
     }).toJS;
-    for (final type in ['touchstart', 'pointerdown', 'mousedown', 'click']) {
-      web.window.addEventListener(type, unlock, true.toJS);
+    for (final type in ['touchstart', 'touchend', 'pointerdown', 'mousedown', 'click']) {
+      web.document.addEventListener(type, unlock, true.toJS);
     }
   }
 
@@ -223,15 +256,15 @@ class WebEngineHost implements EngineHost {
   Future<void> play({required int tempo}) async {
     final win = _contentWindow;
     if (win == null || !_ready) return;
-    // Synchronously enter the iframe during the Flutter button gesture so
-    // Safari iOS can unlock AudioContext; then await resume and start.
+    // 1) Unlock AudioContext in the PARENT document (Flutter gesture lives here).
+    _unlockParentAudio();
+    // 2) Start playback in the iframe using parent.__scoreflowAudioCtx.
     win.eval('''
 (function () {
   var play = function () {
     return window.handlePlaybackCommand('PLAY', $tempo);
   };
   if (window.ScoreFlow && window.ScoreFlow.unlockAudio) {
-    // unlockAudio starts ctx.resume() before its first await (user activation).
     Promise.resolve(window.ScoreFlow.unlockAudio()).then(play).catch(play);
   } else {
     play();
@@ -325,7 +358,7 @@ class WebEngineHost implements EngineHost {
 }
 
 extension on web.Window {
-  /// Same-origin script evaluation (engine iframe shares Flutter origin).
+  /// Same-origin script evaluation (engine iframe / host page).
   void eval(String source) {
     (this as JSObject).callMethod('eval'.toJS, source.toJS);
   }

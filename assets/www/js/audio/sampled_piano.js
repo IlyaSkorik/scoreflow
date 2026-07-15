@@ -16,6 +16,15 @@ export const SampledPiano = {
 
     // Загрузка манифеста + декодирование сэмплов в AudioBuffer.
     load: function (ctx, master) {
+        if (!ctx) return Promise.resolve(false);
+        // AudioBuffers are bound to a context — reset if the host switched
+        // (parent unlock on Safari iOS / Flutter Web).
+        if (this.ctx && this.ctx !== ctx) {
+            this.ready = false;
+            this.loading = false;
+            this.zones = [];
+            this.voices = [];
+        }
         if (this.ready || this.loading) return Promise.resolve(this.ready);
         this.ctx = ctx; this.master = master; this.loading = true;
         const self = this;

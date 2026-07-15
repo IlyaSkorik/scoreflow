@@ -14,14 +14,38 @@ export const AudioEngine = {
     isSafariIOS: function () { return isSafariIOS(); },
 
     ensure: function () {
-        if (this.ctx) return this.ctx;
-        const AC = window.AudioContext || window.webkitAudioContext;
-        if (!AC) return null;
-        this.ctx = new AC();
+        // Prefer parent-page AudioContext (Flutter Web / Safari iOS unlock).
+        let shared = null;
+        try {
+            if (window.parent && window.parent !== window) {
+                shared = window.parent.__scoreflowAudioCtx || null;
+            }
+        } catch (e) { /* cross-origin */ }
+        if (!shared) shared = window.__scoreflowAudioCtx || null;
+
+        if (shared && this.ctx !== shared) {
+            this.ctx = shared;
+            this.master = null;
+            this.noise = null;
+        }
+        if (this.ctx && this.master) return this.ctx;
+
+        if (!this.ctx) {
+            // Inside Flutter Web iframe: do NOT create a local context — Safari
+            // will never unlock it. Wait for parent.__scoreflowAudioCtx.
+            try {
+                if (window.parent && window.parent !== window && !shared) {
+                    return null;
+                }
+            } catch (e) { /* cross-origin: fall through and create local */ }
+            const AC = window.AudioContext || window.webkitAudioContext;
+            if (!AC) return null;
+            this.ctx = new AC();
+        }
+
         this.master = this.ctx.createGain();
         this.master.gain.value = 0.9;
         this.master.connect(this.ctx.destination);
-        // буфер белого шума для ударных — создаётся один раз
         const len = Math.floor(this.ctx.sampleRate);
         const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
         const d = buf.getChannelData(0);

@@ -15,6 +15,13 @@ export const SampledDrums = {
     voices: [], maxVoices: 64, gc: null,
 
     load: function (ctx, master) {
+        if (!ctx) return Promise.resolve(false);
+        if (this.ctx && this.ctx !== ctx) {
+            this.ready = false;
+            this.loading = false;
+            this.kit = {};
+            this.voices = [];
+        }
         if (this.ready || this.loading) return Promise.resolve(this.ready);
         this.ctx = ctx; this.master = master; this.loading = true;
         const self = this;

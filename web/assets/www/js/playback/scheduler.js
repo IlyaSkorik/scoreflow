@@ -138,14 +138,21 @@ export const Playback = {
 
     start: async function (payload, tempo) {
         if (!payload) return;
+        // Safari iOS / Flutter Web: await parent AudioContext unlock first.
+        await AudioEngine.resume();
         const ctx = AudioEngine.ensure();
         if (!ctx) { showError('Web Audio недоступен в этом WebView.'); return; }
-        // Safari iOS: must await resume() before any note scheduling.
-        await AudioEngine.resume();
         if (ctx.state !== 'running') {
-            // Still locked — retry once (covers late gesture activation).
             await AudioEngine.resume();
         }
+        // (Re)load samples against the active context after unlock.
+        try {
+            if (payload.instrument === 'drums') {
+                await SampledDrums.load(ctx, AudioEngine.master);
+            } else {
+                await SampledPiano.load(ctx, AudioEngine.master);
+            }
+        } catch (e) { /* synth fallback */ }
         this.stop(true); // сброс прежней сессии без снятия активности UI
         // Базовый темп (bpm) — из слайдера транспорта; смены `_tempo` в партитуре
         // компилятор накладывает поверх. Абсолютное время события считает tempo map
